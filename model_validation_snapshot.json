@@ -1,0 +1,469 @@
+{
+  "validated_at": "2026-04-01T11:28:27.896500+00:00",
+  "models": {
+    "groq::meta-llama/llama-4-scout-17b-16e-instruct": {
+      "provider": "groq",
+      "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "passed": true,
+      "message_excerpt": "Верни Уа Алейкум Ассалам! \n\nКак дела?",
+      "error": null
+    },
+    "groq::moonshotai/kimi-k2-instruct": {
+      "provider": "groq",
+      "model_id": "moonshotai/kimi-k2-instruct",
+      "passed": true,
+      "message_excerpt": "Уа алейкум ассалам!",
+      "error": null
+    },
+    "groq::openai/gpt-oss-20b": {
+      "provider": "groq",
+      "model_id": "openai/gpt-oss-20b",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:01.513491+00:00"
+    },
+    "groq::moonshotai/kimi-k2-instruct-0905": {
+      "provider": "groq",
+      "model_id": "moonshotai/kimi-k2-instruct-0905",
+      "passed": true,
+      "message_excerpt": "Уа алейкум ассалам!",
+      "error": null
+    },
+    "groq::meta-llama/llama-prompt-guard-2-22m": {
+      "provider": "groq",
+      "model_id": "meta-llama/llama-prompt-guard-2-22m",
+      "passed": false,
+      "message_excerpt": "0.0007293357630260289",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:00.783215+00:00"
+    },
+    "groq::openai/gpt-oss-safeguard-20b": {
+      "provider": "groq",
+      "model_id": "openai/gpt-oss-safeguard-20b",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:19:57.479005+00:00"
+    },
+    "groq::llama-3.3-70b-versatile": {
+      "provider": "groq",
+      "model_id": "llama-3.3-70b-versatile",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам!",
+      "error": null
+    },
+    "groq::openai/gpt-oss-120b": {
+      "provider": "groq",
+      "model_id": "openai/gpt-oss-120b",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:19:55.198209+00:00"
+    },
+    "groq::qwen/qwen3-32b": {
+      "provider": "groq",
+      "model_id": "qwen/qwen3-32b",
+      "passed": false,
+      "message_excerpt": "<think>\nOkay, the user started with \"Ассаламу алейкум!\" which is an Arabic greeting meaning \"Peace be upon you.\" I",
+      "error": null,
+      "tested_at": "2026-04-01T11:19:58.861397+00:00"
+    },
+    "groq::llama-3.1-8b-instant": {
+      "provider": "groq",
+      "model_id": "llama-3.1-8b-instant",
+      "passed": true,
+      "message_excerpt": "Верни Уа Алейкум Ассалам! Как поживаете?",
+      "error": null
+    },
+    "groq::meta-llama/llama-prompt-guard-2-86m": {
+      "provider": "groq",
+      "model_id": "meta-llama/llama-prompt-guard-2-86m",
+      "passed": false,
+      "message_excerpt": "0.0005217210273258388",
+      "error": null,
+      "tested_at": "2026-04-01T11:19:59.778051+00:00"
+    },
+    "cerebras::qwen-3-235b-a22b-instruct-2507": {
+      "provider": "cerebras",
+      "model_id": "qwen-3-235b-a22b-instruct-2507",
+      "passed": true,
+      "message_excerpt": "Ассаламу алейкум! 🌟  \nУа алейкум ассалам, қандайсиз?",
+      "error": null
+    },
+    "cerebras::llama3.1-8b": {
+      "provider": "cerebras",
+      "model_id": "llama3.1-8b",
+      "passed": true,
+      "message_excerpt": "Верни Уа Алейкум Ассалам! Как поживаете?",
+      "error": null
+    },
+    "sambanova::DeepSeek-R1-0528": {
+      "provider": "sambanova",
+      "model_id": "DeepSeek-R1-0528",
+      "passed": false,
+      "message_excerpt": "<think>\nАх, пользователь написал приветствие на арабском: \"Ассаламу алейкум!\" - что означает \"М",
+      "error": null,
+      "tested_at": "2026-04-01T11:26:55.247384+00:00"
+    },
+    "sambanova::DeepSeek-R1-Distill-Llama-70B": {
+      "provider": "sambanova",
+      "model_id": "DeepSeek-R1-Distill-Llama-70B",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:57.321434+00:00"
+    },
+    "sambanova::DeepSeek-V3-0324": {
+      "provider": "sambanova",
+      "model_id": "DeepSeek-V3-0324",
+      "passed": true,
+      "message_excerpt": "**Ва алейкум ассалам ва рахматуллахи ва баракатуху!** 😊  \n\nЧем могу помочь?",
+      "error": null
+    },
+    "sambanova::DeepSeek-V3.1": {
+      "provider": "sambanova",
+      "model_id": "DeepSeek-V3.1",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам ва рахматуЛлахи ва баракатух!",
+      "error": null
+    },
+    "sambanova::DeepSeek-V3.1-Terminus": {
+      "provider": "sambanova",
+      "model_id": "DeepSeek-V3.1-Terminus",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам ва рахматуллахи ва баракатух!\n\nСпасибо за ваше приветствие!",
+      "error": null
+    },
+    "sambanova::DeepSeek-V3.1-cb": {
+      "provider": "sambanova",
+      "model_id": "DeepSeek-V3.1-cb",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам ва рахматуллахи ва баракатух!",
+      "error": null
+    },
+    "sambanova::DeepSeek-V3.2": {
+      "provider": "sambanova",
+      "model_id": "DeepSeek-V3.2",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам ва рахматуллахи ва баракятуху!  \nСпасибо за ваше привет",
+      "error": null,
+      "tested_at": "2026-04-01T11:27:25.746930+00:00"
+    },
+    "sambanova::E5-Mistral-7B-Instruct": {
+      "provider": "sambanova",
+      "model_id": "E5-Mistral-7B-Instruct",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:27:56.916697+00:00"
+    },
+    "sambanova::Llama-3.3-Swallow-70B-Instruct-v0.4": {
+      "provider": "sambanova",
+      "model_id": "Llama-3.3-Swallow-70B-Instruct-v0.4",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам! \n\n(And peace be upon you!)",
+      "error": null
+    },
+    "sambanova::Llama-4-Maverick-17B-128E-Instruct": {
+      "provider": "sambanova",
+      "model_id": "Llama-4-Maverick-17B-128E-Instruct",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам! Как я могу вам помочь сегодня?",
+      "error": null
+    },
+    "sambanova::Meta-Llama-3.1-8B-Instruct": {
+      "provider": "sambanova",
+      "model_id": "Meta-Llama-3.1-8B-Instruct",
+      "passed": true,
+      "message_excerpt": "Верни Уа Алейкум Ассалам! Как поживаете?",
+      "error": null
+    },
+    "sambanova::Meta-Llama-3.3-70B-Instruct": {
+      "provider": "sambanova",
+      "model_id": "Meta-Llama-3.3-70B-Instruct",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам! Как я могу вам помочь сегодня?",
+      "error": null
+    },
+    "sambanova::Qwen3-235B": {
+      "provider": "sambanova",
+      "model_id": "Qwen3-235B",
+      "passed": true,
+      "message_excerpt": "Ассаламу алейкум! 🌟  \nУа алейкум ассалам ва рахматуллахи ва",
+      "error": null
+    },
+    "sambanova::Qwen3-32B": {
+      "provider": "sambanova",
+      "model_id": "Qwen3-32B",
+      "passed": false,
+      "message_excerpt": "<think>\nOkay, the user started with \"Ассаламу алейкум!\" which is an Arabic greeting meaning \"Peace be upon you!\" in",
+      "error": null,
+      "tested_at": "2026-04-01T11:28:19.634443+00:00"
+    },
+    "sambanova::gpt-oss-120b": {
+      "provider": "sambanova",
+      "model_id": "gpt-oss-120b",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:28:27.896500+00:00"
+    },
+    "openrouter::qwen/qwen3.6-plus-preview:free": {
+      "provider": "openrouter",
+      "model_id": "qwen/qwen3.6-plus-preview:free",
+      "passed": true,
+      "message_excerpt": "Уа алейкум ассалам! 🌙✨\n\nЧем могу помочь вам сегодня?",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:26.029509+00:00"
+    },
+    "openrouter::nvidia/nemotron-3-super-120b-a12b:free": {
+      "provider": "openrouter",
+      "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:39.344351+00:00"
+    },
+    "openrouter::minimax/minimax-m2.5:free": {
+      "provider": "openrouter",
+      "model_id": "minimax/minimax-m2.5:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:20:40.160055+00:00"
+    },
+    "openrouter::stepfun/step-3.5-flash:free": {
+      "provider": "openrouter",
+      "model_id": "stepfun/step-3.5-flash:free",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:48.475858+00:00"
+    },
+    "openrouter::arcee-ai/trinity-large-preview:free": {
+      "provider": "openrouter",
+      "model_id": "arcee-ai/trinity-large-preview:free",
+      "passed": true,
+      "message_excerpt": "Ассаламу алейкум!  \nВа алейкум ассалам! Как у вас дела? 😊",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:54.090581+00:00"
+    },
+    "openrouter::liquid/lfm-2.5-1.2b-thinking:free": {
+      "provider": "openrouter",
+      "model_id": "liquid/lfm-2.5-1.2b-thinking:free",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:56.602601+00:00"
+    },
+    "openrouter::liquid/lfm-2.5-1.2b-instruct:free": {
+      "provider": "openrouter",
+      "model_id": "liquid/lfm-2.5-1.2b-instruct:free",
+      "passed": false,
+      "message_excerpt": "Wa alaykum assalam!  \n\"Assalamu alaikum\" (Allah's peace be upon you) is a beautiful gre",
+      "error": null,
+      "tested_at": "2026-04-01T11:20:59.968997+00:00"
+    },
+    "openrouter::nvidia/nemotron-3-nano-30b-a3b:free": {
+      "provider": "openrouter",
+      "model_id": "nvidia/nemotron-3-nano-30b-a3b:free",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:21:01.415961+00:00"
+    },
+    "openrouter::arcee-ai/trinity-mini:free": {
+      "provider": "openrouter",
+      "model_id": "arcee-ai/trinity-mini:free",
+      "passed": false,
+      "message_excerpt": "",
+      "error": null,
+      "tested_at": "2026-04-01T11:21:10.953233+00:00"
+    },
+    "openrouter::qwen/qwen3-next-80b-a3b-instruct:free": {
+      "provider": "openrouter",
+      "model_id": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:21:12.266285+00:00"
+    },
+    "openrouter::nvidia/nemotron-nano-9b-v2:free": {
+      "provider": "openrouter",
+      "model_id": "nvidia/nemotron-nano-9b-v2:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": null,
+      "tested_at": "2026-04-01T11:26:13.703439+00:00"
+    },
+    "openrouter::openai/gpt-oss-120b:free": {
+      "provider": "openrouter",
+      "model_id": "openai/gpt-oss-120b:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:14.494610+00:00"
+    },
+    "openrouter::openai/gpt-oss-20b:free": {
+      "provider": "openrouter",
+      "model_id": "openai/gpt-oss-20b:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:15.000369+00:00"
+    },
+    "openrouter::z-ai/glm-4.5-air:free": {
+      "provider": "openrouter",
+      "model_id": "z-ai/glm-4.5-air:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:18.829907+00:00"
+    },
+    "openrouter::qwen/qwen3-coder:free": {
+      "provider": "openrouter",
+      "model_id": "qwen/qwen3-coder:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:20.113134+00:00"
+    },
+    "openrouter::cognitivecomputations/dolphin-mistral-24b-venice-edition:free": {
+      "provider": "openrouter",
+      "model_id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:21.335676+00:00"
+    },
+    "openrouter::google/gemma-3n-e2b-it:free": {
+      "provider": "openrouter",
+      "model_id": "google/gemma-3n-e2b-it:free",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам! Рад слышать вас. Чем могу помочь? 😊\n",
+      "error": null,
+      "tested_at": "2026-04-01T11:26:24.133012+00:00"
+    },
+    "openrouter::google/gemma-3-4b-it:free": {
+      "provider": "openrouter",
+      "model_id": "google/gemma-3-4b-it:free",
+      "passed": false,
+      "message_excerpt": "Вассаламу алейкум ва рахматуллахи ва баракатух! \n\n(Это ответ на \"Ассаламу",
+      "error": null,
+      "tested_at": "2026-04-01T11:26:28.265869+00:00"
+    },
+    "openrouter::google/gemma-3-12b-it:free": {
+      "provider": "openrouter",
+      "model_id": "google/gemma-3-12b-it:free",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам!\n",
+      "error": null,
+      "tested_at": "2026-04-01T11:26:34.448776+00:00"
+    },
+    "openrouter::google/gemma-3-27b-it:free": {
+      "provider": "openrouter",
+      "model_id": "google/gemma-3-27b-it:free",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам!\n",
+      "error": null,
+      "tested_at": "2026-04-01T11:26:40.131325+00:00"
+    },
+    "openrouter::meta-llama/llama-3.3-70b-instruct:free": {
+      "provider": "openrouter",
+      "model_id": "meta-llama/llama-3.3-70b-instruct:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:41.366027+00:00"
+    },
+    "openrouter::meta-llama/llama-3.2-3b-instruct:free": {
+      "provider": "openrouter",
+      "model_id": "meta-llama/llama-3.2-3b-instruct:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:42.626945+00:00"
+    },
+    "openrouter::nousresearch/hermes-3-llama-3.1-405b:free": {
+      "provider": "openrouter",
+      "model_id": "nousresearch/hermes-3-llama-3.1-405b:free",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:43.977636+00:00"
+    },
+    "gemini::models/gemini-2.5-flash": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.5-flash",
+      "passed": false,
+      "message_excerpt": "Уа",
+      "error": null,
+      "tested_at": "2026-04-01T11:26:45.439797+00:00"
+    },
+    "gemini::models/gemini-2.0-flash": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.0-flash",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:46.163480+00:00"
+    },
+    "gemini::models/gemini-2.0-flash-001": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.0-flash-001",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:46.949200+00:00"
+    },
+    "gemini::models/gemini-2.0-flash-lite-001": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.0-flash-lite-001",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:47.715543+00:00"
+    },
+    "gemini::models/gemini-2.0-flash-lite": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.0-flash-lite",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:48.525971+00:00"
+    },
+    "gemini::models/gemini-2.5-flash-preview-tts": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.5-flash-preview-tts",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:49.365881+00:00"
+    },
+    "gemini::models/gemini-2.5-flash-lite": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.5-flash-lite",
+      "passed": true,
+      "message_excerpt": "Ва алейкум ассалам!",
+      "error": null,
+      "tested_at": "2026-04-01T11:26:50.565643+00:00"
+    },
+    "gemini::models/gemini-2.5-flash-image": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.5-flash-image",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:51.286926+00:00"
+    },
+    "gemini::models/gemini-2.5-flash-lite-preview-09-2025": {
+      "provider": "gemini",
+      "model_id": "models/gemini-2.5-flash-lite-preview-09-2025",
+      "passed": false,
+      "message_excerpt": null,
+      "error": "All upstream providers failed",
+      "tested_at": "2026-04-01T11:26:52.069666+00:00"
+    }
+  }
+}

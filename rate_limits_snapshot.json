@@ -1,0 +1,293 @@
+{
+  "saved_at": "2026-04-01T11:40:39.047369+00:00",
+  "last_probe_at": "2026-04-01T11:19:00.668462+00:00",
+  "last_probe_summary": {
+    "successful": [
+      "groq",
+      "openrouter",
+      "cerebras",
+      "gemini",
+      "sambanova"
+    ],
+    "failed": []
+  },
+  "state": {
+    "groq": {
+      "provider": "groq",
+      "limits": {
+        "requests": {
+          "minute": {
+            "limit": 1000,
+            "remaining": 999,
+            "reset_seconds": 6,
+            "reset_at": "2026-04-01T11:20:06.768344+00:00"
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "tokens": {
+          "minute": {
+            "limit": 8000,
+            "remaining": 7876,
+            "reset_seconds": 0,
+            "reset_at": "2026-04-01T11:20:01.498561+00:00"
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "rpm": 1000,
+        "rpm_remaining": 999,
+        "rpm_reset": 6,
+        "rpd": null,
+        "rpd_remaining": null,
+        "rpd_reset": null,
+        "source": "response_headers"
+      },
+      "last_observed_at": "2026-04-01T11:40:24.037203+00:00",
+      "last_status_code": 200,
+      "last_error": null
+    },
+    "openrouter": {
+      "provider": "openrouter",
+      "limits": {
+        "requests": {
+          "minute": {
+            "limit": 1,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "tokens": {
+          "minute": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "rpm": 1,
+        "rpm_remaining": null,
+        "rpm_reset": null,
+        "rpd": null,
+        "rpd_remaining": null,
+        "rpd_reset": null,
+        "source": "fallback_default",
+        "note": "Provider did not expose rate-limit headers; using safe fallback of 1 RPM."
+      },
+      "last_observed_at": "2026-04-01T11:40:24.616610+00:00",
+      "last_status_code": 200,
+      "last_error": null
+    },
+    "cerebras": {
+      "provider": "cerebras",
+      "limits": {
+        "requests": {
+          "minute": {
+            "limit": 30,
+            "remaining": 29,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": 900,
+            "remaining": 899,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": 14400,
+            "remaining": 14399,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "tokens": {
+          "minute": {
+            "limit": 60000,
+            "remaining": 59957,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": 1000000,
+            "remaining": 999957,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": 1000000,
+            "remaining": 999957,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "rpm": 30,
+        "rpm_remaining": 29,
+        "rpm_reset": null,
+        "rpd": 14400,
+        "rpd_remaining": 14399,
+        "rpd_reset": null,
+        "source": "response_headers"
+      },
+      "last_observed_at": "2026-04-01T11:40:25.628958+00:00",
+      "last_status_code": 200,
+      "last_error": null
+    },
+    "gemini": {
+      "provider": "gemini",
+      "limits": {
+        "requests": {
+          "minute": {
+            "limit": 1,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "tokens": {
+          "minute": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "rpm": 1,
+        "rpm_remaining": null,
+        "rpm_reset": null,
+        "rpd": null,
+        "rpd_remaining": null,
+        "rpd_reset": null,
+        "source": "fallback_default",
+        "note": "Provider did not expose rate-limit headers; using safe fallback of 1 RPM."
+      },
+      "last_observed_at": "2026-04-01T11:40:26.512337+00:00",
+      "last_status_code": 200,
+      "last_error": null
+    },
+    "sambanova": {
+      "provider": "sambanova",
+      "limits": {
+        "requests": {
+          "minute": {
+            "limit": 1,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": 20,
+            "remaining": 14,
+            "reset_seconds": 86397,
+            "reset_at": "2026-04-02T11:28:24.880877+00:00"
+          }
+        },
+        "tokens": {
+          "minute": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "rpm": 1,
+        "rpm_remaining": null,
+        "rpm_reset": null,
+        "rpd": 20,
+        "rpd_remaining": 14,
+        "rpd_reset": 86397,
+        "source": "response_headers"
+      },
+      "last_observed_at": "2026-04-01T11:40:39.047369+00:00",
+      "last_status_code": 200,
+      "last_error": null
+    }
+  }
+}

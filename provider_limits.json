@@ -1,0 +1,35 @@
+{
+  "snapshot_date": "2026-04-01",
+  "providers": {
+    "groq": {
+      "estimated_rpm": 1000,
+      "estimated_rpd": 14400,
+      "tier": "observed_live",
+      "notes": "Auto-synced from live provider headers."
+    },
+    "cerebras": {
+      "estimated_rpm": 30,
+      "estimated_rpd": 14400,
+      "tier": "observed_live",
+      "notes": "Live response headers exposed 30 requests per minute and 14,400 requests per day."
+    },
+    "openrouter": {
+      "estimated_rpm": 20,
+      "estimated_rpd": "50-1000",
+      "tier": "free_models",
+      "notes": "Applies to :free models; free-tier daily limit depends on credits and chosen model."
+    },
+    "gemini": {
+      "estimated_rpm": 10,
+      "estimated_rpd": 250,
+      "tier": "free_tier_estimate",
+      "notes": "Assumes the current project is still on Gemini free tier."
+    },
+    "sambanova": {
+      "estimated_rpm": 1,
+      "estimated_rpd": 20,
+      "tier": "observed_live",
+      "notes": "Auto-synced from live provider headers."
+    }
+  }
+}
