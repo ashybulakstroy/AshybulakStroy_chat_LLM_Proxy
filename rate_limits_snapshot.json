@@ -1,6 +1,6 @@
 {
-  "saved_at": "2026-04-01T12:45:12.058055+00:00",
-  "last_probe_at": "2026-04-01T12:36:21.591035+00:00",
+  "saved_at": "2026-04-01T13:03:16.978650+00:00",
+  "last_probe_at": "2026-04-01T13:01:29.721591+00:00",
   "last_probe_summary": {
     "successful": [
       "groq",
@@ -63,7 +63,7 @@
         "rpd_reset": null,
         "source": "response_headers"
       },
-      "last_observed_at": "2026-04-01T12:45:07.145242+00:00",
+      "last_observed_at": "2026-04-01T13:03:07.566738+00:00",
       "last_status_code": 200,
       "last_error": null
     },
@@ -119,7 +119,7 @@
         "source": "fallback_default",
         "note": "Provider did not expose rate-limit headers; using safe fallback of 1 RPM."
       },
-      "last_observed_at": "2026-04-01T12:45:07.671382+00:00",
+      "last_observed_at": "2026-04-01T13:03:08.280654+00:00",
       "last_status_code": 200,
       "last_error": null
     },
@@ -174,7 +174,7 @@
         "rpd_reset": null,
         "source": "response_headers"
       },
-      "last_observed_at": "2026-04-01T12:45:08.657472+00:00",
+      "last_observed_at": "2026-04-01T13:03:08.987038+00:00",
       "last_status_code": 200,
       "last_error": null
     },
@@ -230,7 +230,7 @@
         "source": "fallback_default",
         "note": "Provider did not expose rate-limit headers; using safe fallback of 1 RPM."
       },
-      "last_observed_at": "2026-04-01T12:45:10.674430+00:00",
+      "last_observed_at": "2026-04-01T13:03:09.706406+00:00",
       "last_status_code": 200,
       "last_error": null
     },
@@ -285,7 +285,7 @@
         "rpd_reset": 86397,
         "source": "response_headers"
       },
-      "last_observed_at": "2026-04-01T12:45:12.058055+00:00",
+      "last_observed_at": "2026-04-01T13:03:16.978650+00:00",
       "last_status_code": 200,
       "last_error": null
     }
