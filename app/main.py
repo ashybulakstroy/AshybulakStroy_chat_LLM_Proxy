@@ -13,8 +13,8 @@ logging.basicConfig(
 )
 
 app = FastAPI(
-    title="Ashybulak AI Connect",
-    description="Lightweight OpenAI-compatible proxy service for LLM requests.",
+    title="AshybulakStroy AI HUB",
+    description="Lightweight OpenAI-compatible proxy gateway for LLM requests.",
     version="0.1.0",
 )
 

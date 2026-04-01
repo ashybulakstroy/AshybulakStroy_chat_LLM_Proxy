@@ -59,7 +59,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ashybulak AI Connect Admin</title>
+  <title>AshybulakStroy AI HUB Admin</title>
   <style>
     :root {
       --bg: #f5f0e6;
@@ -335,7 +335,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
   <div class="wrap">
     <section class="hero">
       <div class="eyebrow">Админка</div>
-      <h1>Ashybulak AI Connect</h1>
+      <h1>AshybulakStroy AI HUB</h1>
       <p class="lead">Одна таблица сверху вниз: каждая строка это модель, а лимиты подтягиваются из live-наблюдений провайдера и сохранённой оценки RPM/RPD.</p>
       <div class="actions">
         <button id="refreshAll">Обновить</button>

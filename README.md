@@ -1,4 +1,4 @@
-# Ashybulak AI Connect
+# AshybulakStroy AI HUB
 
 Лёгкий FastAPI-сервис для проксирования запросов к OpenAI-совместимому LLM API.
 
