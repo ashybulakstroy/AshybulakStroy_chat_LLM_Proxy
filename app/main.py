@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import FastAPI
@@ -23,6 +24,27 @@ provider_router = ProviderRouter()
 logger = logging.getLogger("ashybulak.proxy")
 
 
+async def _run_startup_probe_background() -> None:
+    try:
+        summary = await provider_router.probe_provider_limits()
+        rate_limit_store.record_probe_summary(
+            successful=summary["successful"],
+            failed=summary["failed"],
+        )
+        _refresh_admin_cache()
+        logger.info(
+            "startup_probe_completed successful=%s failed=%s",
+            len(summary["successful"]),
+            len(summary["failed"]),
+        )
+    except ValueError:
+        rate_limit_store.record_probe_summary(successful=[], failed=[])
+        _refresh_admin_cache()
+        logger.warning("startup_probe_skipped no providers configured")
+    except Exception as exc:
+        logger.exception("startup_probe_failed error=%s", str(exc))
+
+
 @app.on_event("startup")
 async def startup_probe_limits() -> None:
     logger.info(
@@ -33,16 +55,7 @@ async def startup_probe_limits() -> None:
     provider_names = list(settings.get_provider_configs().keys())
     rate_limit_store.load_snapshot(provider_names)
     _refresh_admin_cache()
-    try:
-        summary = await provider_router.probe_provider_limits()
-        rate_limit_store.record_probe_summary(
-            successful=summary["successful"],
-            failed=summary["failed"],
-        )
-        _refresh_admin_cache()
-    except ValueError:
-        rate_limit_store.record_probe_summary(successful=[], failed=[])
-        _refresh_admin_cache()
+    asyncio.create_task(_run_startup_probe_background())
 
 
 @app.get("/health", tags=["Health"])

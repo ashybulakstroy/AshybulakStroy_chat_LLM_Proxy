@@ -45,6 +45,29 @@ class Settings:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
     PROXY_MODE: str = os.getenv("PROXY_MODE", "LOAD_BALANCE").upper()
 
+    P2P_ENABLED: bool = os.getenv("P2P_ENABLED", "false").lower() in ("1", "true", "yes")
+    NODE_MODE: str = os.getenv("NODE_MODE", "peer").strip().lower()
+    P2P_SCOPE: str = os.getenv("P2P_SCOPE", "private").strip().lower()
+    P2P_NODE_NAME: str = os.getenv("P2P_NODE_NAME", "home-node").strip() or "home-node"
+    P2P_NODE_ID: str = os.getenv("P2P_NODE_ID", "").strip()
+    P2P_CLUSTER_NAME: str = os.getenv("P2P_CLUSTER_NAME", "default").strip() or "default"
+    P2P_MASTER_URL: str = os.getenv("P2P_MASTER_URL", "").strip()
+    P2P_ALLOW_MASTER: bool = os.getenv("P2P_ALLOW_MASTER", "true").lower() in ("1", "true", "yes")
+    P2P_ACCEPT_REMOTE_TASKS: bool = os.getenv("P2P_ACCEPT_REMOTE_TASKS", "true").lower() in ("1", "true", "yes")
+    P2P_SHARE_CAPACITY: bool = os.getenv("P2P_SHARE_CAPACITY", "true").lower() in ("1", "true", "yes")
+    P2P_SHARED_RPM_RATIO: float = float(os.getenv("P2P_SHARED_RPM_RATIO", "1.0"))
+    P2P_SHARED_TPM_RATIO: float = float(os.getenv("P2P_SHARED_TPM_RATIO", "1.0"))
+    P2P_MAX_REMOTE_SESSIONS: int = int(os.getenv("P2P_MAX_REMOTE_SESSIONS", "3"))
+    P2P_MAX_OUTGOING_SESSIONS: int = int(os.getenv("P2P_MAX_OUTGOING_SESSIONS", "5"))
+    P2P_MAX_QUEUE_SIZE: int = int(os.getenv("P2P_MAX_QUEUE_SIZE", "50"))
+    P2P_SESSION_TIMEOUT_SEC: int = int(os.getenv("P2P_SESSION_TIMEOUT_SEC", "90"))
+    P2P_PER_PEER_RPM_LIMIT: int = int(os.getenv("P2P_PER_PEER_RPM_LIMIT", "20"))
+    P2P_PER_TARGET_PEER_RPM_LIMIT: int = int(os.getenv("P2P_PER_TARGET_PEER_RPM_LIMIT", "20"))
+    P2P_GLOBAL_INCOMING_RPM_LIMIT: int = int(os.getenv("P2P_GLOBAL_INCOMING_RPM_LIMIT", "60"))
+    P2P_GLOBAL_OUTGOING_RPM_LIMIT: int = int(os.getenv("P2P_GLOBAL_OUTGOING_RPM_LIMIT", "60"))
+    P2P_HEARTBEAT_INTERVAL_SEC: int = int(os.getenv("P2P_HEARTBEAT_INTERVAL_SEC", "15"))
+    P2P_PEER_STALE_AFTER_SEC: int = int(os.getenv("P2P_PEER_STALE_AFTER_SEC", "45"))
+
     def get_provider_configs(self) -> Dict[str, ProviderConfig]:
         configs = {
             "openai": ProviderConfig("openai", self.OPENAI_API_KEY, self.OPENAI_API_BASE),

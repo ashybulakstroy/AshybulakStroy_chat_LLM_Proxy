@@ -127,6 +127,51 @@ curl http://localhost:8800/v1/chat/completions -X POST \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Привет"}]}'
 ```
 
+## P2P MVP
+
+The repository now contains a separate P2P debug/MVP layer for future `MASTER` and `PEER` orchestration.
+
+Current MVP scope:
+
+- node runtime mode: `peer`, `master`, `master_cache`, `auto`
+- P2P enable/disable runtime control
+- separate P2P debug admin page
+- peer heartbeat/debug registration
+- peer registry in memory
+- peer capabilities:
+  - chat support
+  - embeddings support
+  - providers list
+  - models list
+  - health score
+- session counters for incoming/outgoing/queued P2P work
+- dispatch preview for P2P selection
+- network map summary:
+  - masters count
+  - master providers count
+  - peers count
+  - peer providers count
+  - unique live routes
+- P2P logs with `p2p_...` prefixes
+
+Main endpoints:
+
+- `/admin/p2p`
+- `/admin/p2p/status`
+- `/admin/p2p/peers`
+- `/admin/p2p/dispatch/preview`
+
+Important limitation:
+
+- real remote P2P execution is not implemented yet
+- current P2P layer is a selection/debug MVP, not full peer-to-peer transport
+
+Main files:
+
+- `app/p2p_service.py`
+- `app/p2p_admin_ui.py`
+- `P2P_SUBPROJECT_SPEC.md`
+
 ## Дальше можно добавить
 
 - маршрутизацию между несколькими провайдерами

@@ -1772,9 +1772,47 @@ ADMIN_PAGE_HTML = """<!doctype html>
       }
     }
 
+    let liveLimitsPollHandle = null;
+
+    async function getLiveLimitsStatus() {
+      return getJson('/health/limits/live/status');
+    }
+
+    function stopLiveLimitsPolling() {
+      if (liveLimitsPollHandle) {
+        clearInterval(liveLimitsPollHandle);
+        liveLimitsPollHandle = null;
+      }
+    }
+
+    function startLiveLimitsPolling() {
+      stopLiveLimitsPolling();
+      liveLimitsPollHandle = setInterval(async () => {
+        try {
+          const status = await getLiveLimitsStatus();
+          const refreshLiveButton = document.getElementById('refreshLive');
+          if (refreshLiveButton) {
+            refreshLiveButton.disabled = Boolean(status.running);
+            refreshLiveButton.textContent = status.running ? `${t('refreshLive')}...` : t('refreshLive');
+          }
+          if (!status.running) {
+            stopLiveLimitsPolling();
+            await loadDashboard();
+          }
+        } catch (_) {
+          stopLiveLimitsPolling();
+        }
+      }, 2000);
+    }
+
     async function refreshLive() {
-      await getJson('/health/limits/live', { method: 'POST' });
-      await loadDashboard();
+      const refreshLiveButton = document.getElementById('refreshLive');
+      if (refreshLiveButton) {
+        refreshLiveButton.disabled = true;
+        refreshLiveButton.textContent = `${t('refreshLive')}...`;
+      }
+      await getJson('/health/limits/live?started_by=admin_ui', { method: 'POST' });
+      startLiveLimitsPolling();
     }
 
     async function refreshValidatedLlm(startedBy = 'manual') {
@@ -1839,6 +1877,9 @@ ADMIN_PAGE_HTML = """<!doctype html>
         }
       });
     }
+    getLiveLimitsStatus().then((status) => {
+      if (status && status.running) startLiveLimitsPolling();
+    }).catch(() => {});
     loadDashboard();
     startAutoRefresh();
   </script>

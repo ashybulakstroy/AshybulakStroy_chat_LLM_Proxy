@@ -62,3 +62,36 @@
 - Реализовать систему ключей клиентов
 - Добавить кеширование и ретраи
 - Написать тесты и CI
+
+## Current P2P MVP Status
+
+The project now also includes a P2P orchestration MVP focused on debug visibility and peer selection preparation.
+
+Implemented in MVP:
+
+- runtime node roles:
+  - `peer`
+  - `master`
+  - `master_cache`
+  - `auto`
+- P2P enable/disable runtime switch
+- separate P2P debug admin page
+- in-memory peer registry
+- peer heartbeat upsert
+- peer capability tracking:
+  - providers
+  - models
+  - chat support
+  - embeddings support
+  - health score
+- network map summary
+- dispatch preview with capability/health filtering
+- P2P event logs with `p2p_...` prefix
+
+Not implemented yet:
+
+- real peer-to-peer remote execution
+- peer authentication
+- signal server
+- mDNS discovery
+- distributed cache sync

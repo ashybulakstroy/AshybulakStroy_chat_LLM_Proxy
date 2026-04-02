@@ -8,6 +8,8 @@ from fastapi.responses import HTMLResponse
 
 from app.admin_ui import ADMIN_PAGE_HTML
 from app.config import settings
+from app.p2p_admin_ui import P2P_ADMIN_PAGE_HTML
+from app.p2p_service import p2p_service
 from app.rate_limits import rate_limit_store
 from app.router_service import ProviderRouter, UpstreamProvidersExhausted
 from app.schemas import ChatCompletionRequest, EmbeddingRequest
@@ -54,6 +56,17 @@ VALIDATED_LLM_JOB_STATE = {
     "error": None,
 }
 VALIDATED_LLM_JOB_TASK: asyncio.Task | None = None
+LIVE_LIMITS_JOB_STATE = {
+    "status": "idle",
+    "running": False,
+    "started_by": None,
+    "last_started_at": None,
+    "last_finished_at": None,
+    "probe_successful": 0,
+    "probe_failed": 0,
+    "error": None,
+}
+LIVE_LIMITS_JOB_TASK: asyncio.Task | None = None
 RUNTIME_DISPATCHER_CACHE: dict = {}
 
 
@@ -265,6 +278,25 @@ def _refresh_admin_cache(
     cache_payload.update(dispatcher_payload)
     _save_admin_cache(cache_payload)
     return _set_runtime_dispatcher_cache(cache_payload)
+
+
+def _get_live_limits_job_state() -> dict:
+    return dict(LIVE_LIMITS_JOB_STATE)
+
+
+def _reset_live_limits_job_state(started_by: str | None = None) -> None:
+    LIVE_LIMITS_JOB_STATE.update(
+        {
+            "status": "running",
+            "running": True,
+            "started_by": started_by,
+            "last_started_at": datetime.now(timezone.utc).isoformat(),
+            "last_finished_at": None,
+            "probe_successful": 0,
+            "probe_failed": 0,
+            "error": None,
+        }
+    )
 
 
 async def _refresh_admin_cache_async(
@@ -518,11 +550,42 @@ async def _run_validated_llm_job(started_by: str) -> None:
         VALIDATED_LLM_JOB_TASK = None
 
 
+async def _run_live_limits_job(started_by: str) -> None:
+    global LIVE_LIMITS_JOB_TASK
+
+    _reset_live_limits_job_state(started_by)
+    try:
+        probe_summary = await provider_router.probe_provider_limits()
+        rate_limit_store.record_probe_summary(
+            successful=probe_summary["successful"],
+            failed=probe_summary["failed"],
+        )
+        LIVE_LIMITS_JOB_STATE["probe_successful"] = len(probe_summary["successful"])
+        LIVE_LIMITS_JOB_STATE["probe_failed"] = len(probe_summary["failed"])
+
+        await _sample_provider_limits()
+        await validate_all_models_for_admin()
+        await _refresh_admin_cache_async()
+
+        LIVE_LIMITS_JOB_STATE["status"] = "completed"
+    except Exception as exc:
+        LIVE_LIMITS_JOB_STATE["status"] = "failed"
+        LIVE_LIMITS_JOB_STATE["error"] = str(exc)
+    finally:
+        LIVE_LIMITS_JOB_STATE["running"] = False
+        LIVE_LIMITS_JOB_STATE["last_finished_at"] = datetime.now(timezone.utc).isoformat()
+        LIVE_LIMITS_JOB_TASK = None
+
+
 def _model_validation_key(provider: str, model_id: str) -> str:
     return f"{provider}::{model_id}"
 
 
 def _category_for_model(model: dict) -> str:
+    explicit_category = str(model.get("category", "")).strip().lower()
+    if explicit_category in {"llm", "audio", "video", "other"}:
+        return explicit_category
+
     model_id = str(model.get("id", "")).lower()
     name = str(model.get("name", "")).lower()
     description = str(model.get("description", "")).lower()
@@ -659,6 +722,10 @@ def _estimated_provider_limits(provider_name: str) -> tuple[int, int]:
 
 def _runtime_chat_models() -> list[dict]:
     cache = _get_runtime_dispatcher_cache()
+    validated_llm_models = (cache.get("validated_llm") or {}).get("data") or []
+    if validated_llm_models:
+        return [model for model in validated_llm_models if isinstance(model, dict)]
+
     block_two_models = (cache.get("block_two") or {}).get("data") or []
     if block_two_models:
         return [model for model in block_two_models if isinstance(model, dict)]
@@ -792,6 +859,118 @@ async def get_limits_health() -> dict:
 @router.get("/admin", response_class=HTMLResponse, tags=["Admin"])
 async def admin_dashboard() -> HTMLResponse:
     return HTMLResponse(content=ADMIN_PAGE_HTML)
+
+
+@router.get("/admin/p2p", response_class=HTMLResponse, tags=["Admin"])
+async def p2p_admin_dashboard() -> HTMLResponse:
+    return HTMLResponse(content=P2P_ADMIN_PAGE_HTML)
+
+
+@router.get("/admin/p2p/status", tags=["Admin"])
+async def get_p2p_status() -> dict:
+    return p2p_service.get_status()
+
+
+@router.get("/admin/p2p/peers", tags=["Admin"])
+async def get_p2p_peers() -> dict:
+    status = p2p_service.get_status()
+    return {
+        "status": "ok",
+        "count": len(status.get("peers", [])),
+        "peers": status.get("peers", []),
+    }
+
+
+@router.post("/admin/p2p/config", tags=["Admin"])
+async def update_p2p_runtime_config(
+    node_mode: str | None = Query(default=None),
+    p2p_enabled: bool | None = Query(default=None),
+) -> dict:
+    try:
+        return p2p_service.update_runtime_config(
+            node_mode=node_mode,
+            p2p_enabled=p2p_enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/admin/p2p/peers/heartbeat", tags=["Admin"])
+async def upsert_p2p_peer_heartbeat(
+    peer_id: str = Query(...),
+    node_name: str = Query(...),
+    node_mode: str = Query(default="peer"),
+    scope: str = Query(default="private"),
+    base_url: str = Query(default=""),
+    status: str = Query(default="online"),
+    note: str = Query(default=""),
+    accept_remote_tasks: bool = Query(default=True),
+    share_capacity: bool = Query(default=True),
+    supports_chat: bool = Query(default=True),
+    supports_embeddings: bool = Query(default=True),
+    providers: str | None = Query(default=None),
+    models: str | None = Query(default=None),
+    health_score: float | None = Query(default=None),
+    active_sessions: int = Query(default=0),
+    last_error: str = Query(default=""),
+    shared_rpm_ratio: float = Query(default=1.0),
+    shared_tpm_ratio: float = Query(default=1.0),
+) -> dict:
+    try:
+        peer = p2p_service.register_or_update_peer(
+            peer_id=peer_id,
+            node_name=node_name,
+            node_mode=node_mode,
+            scope=scope,
+            base_url=base_url,
+            status=status,
+            note=note,
+            accept_remote_tasks=accept_remote_tasks,
+            share_capacity=share_capacity,
+            supports_chat=supports_chat,
+            supports_embeddings=supports_embeddings,
+            providers=providers,
+            models=models,
+            health_score=health_score,
+            active_sessions=active_sessions,
+            last_error=last_error,
+            shared_rpm_ratio=shared_rpm_ratio,
+            shared_tpm_ratio=shared_tpm_ratio,
+        )
+        return {"status": "ok", "peer": peer}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/admin/p2p/sessions", tags=["Admin"])
+async def update_p2p_session_counters(
+    active_incoming_sessions: int | None = Query(default=None),
+    active_outgoing_sessions: int | None = Query(default=None),
+    queued_tasks: int | None = Query(default=None),
+) -> dict:
+    return p2p_service.set_session_counters(
+        active_incoming_sessions=active_incoming_sessions,
+        active_outgoing_sessions=active_outgoing_sessions,
+        queued_tasks=queued_tasks,
+    )
+
+
+@router.post("/admin/p2p/dispatch/preview", tags=["Admin"])
+async def p2p_dispatch_preview(
+    requested_provider: str | None = Query(default="auto"),
+    requested_model: str | None = Query(default="auto"),
+    requested_mode: str | None = Query(default=None),
+    task_type: str = Query(default="chat_completion"),
+) -> dict:
+    try:
+        return p2p_service.dispatch_preview(
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            requested_mode=requested_mode,
+            task_type=task_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/admin/limits/estimated", tags=["Admin"])
@@ -960,26 +1139,25 @@ async def test_provider(
     }
 
 
-@router.post("/health/limits/live", tags=["Health"])
-async def refresh_limits_health() -> dict:
-    provider_names = list(settings.get_provider_configs().keys())
-    try:
-        probe_summary = await provider_router.probe_provider_limits()
-        rate_limit_store.record_probe_summary(
-            successful=probe_summary["successful"],
-            failed=probe_summary["failed"],
-        )
-        await _sample_provider_limits()
-        await validate_all_models_for_admin()
-        await _refresh_admin_cache_async()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+@router.get("/health/limits/live/status", tags=["Health"])
+async def get_live_limits_refresh_status() -> dict:
+    return _get_live_limits_job_state()
 
-    return {
-        "status": "ok",
-        "providers": provider_names,
-        **rate_limit_store.get_health_payload(provider_names),
-    }
+
+@router.post("/health/limits/live", tags=["Health"])
+async def refresh_limits_health(started_by: str = Query(default="manual")) -> dict:
+    global LIVE_LIMITS_JOB_TASK
+
+    provider_names = list(settings.get_provider_configs().keys())
+    if not provider_names:
+        raise HTTPException(status_code=400, detail="No providers are configured")
+
+    if LIVE_LIMITS_JOB_TASK and not LIVE_LIMITS_JOB_TASK.done():
+        return {"status": "running", "job": _get_live_limits_job_state()}
+
+    _reset_live_limits_job_state(started_by)
+    LIVE_LIMITS_JOB_TASK = asyncio.create_task(_run_live_limits_job(started_by))
+    return {"status": "started", "job": _get_live_limits_job_state()}
 
 
 @router.get("/v1/models", tags=["Models"])
