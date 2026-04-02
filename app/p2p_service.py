@@ -100,6 +100,7 @@ class P2PService:
         normalized["runtime_status"] = runtime_status
         normalized["accept_remote_tasks"] = self._to_bool(peer.get("accept_remote_tasks"), True)
         normalized["share_capacity"] = self._to_bool(peer.get("share_capacity"), True)
+        normalized["direct_provider_access"] = self._to_bool(peer.get("direct_provider_access"), True)
         normalized["supports_chat"] = self._to_bool(peer.get("supports_chat"), True)
         normalized["supports_embeddings"] = self._to_bool(peer.get("supports_embeddings"), True)
         normalized["providers"] = list(peer.get("providers") or [])
@@ -205,6 +206,8 @@ class P2PService:
                 skip_reason = "accept_remote_tasks=false"
             elif not peer_payload["share_capacity"]:
                 skip_reason = "share_capacity=false"
+            elif not peer_payload["direct_provider_access"]:
+                skip_reason = "direct_provider_access=false"
             elif not self._peer_supports_task(peer_payload, task_type):
                 skip_reason = f"task_not_supported={task_type}"
             elif peer_payload["health_score"] < 0.5:
@@ -292,6 +295,7 @@ class P2PService:
         note: str = "",
         accept_remote_tasks: bool = True,
         share_capacity: bool = True,
+        direct_provider_access: bool = True,
         supports_chat: bool = True,
         supports_embeddings: bool = True,
         providers: str | None = None,
@@ -318,6 +322,7 @@ class P2PService:
                 "note": str(note).strip() or None,
                 "accept_remote_tasks": bool(accept_remote_tasks),
                 "share_capacity": bool(share_capacity),
+                "direct_provider_access": bool(direct_provider_access),
                 "supports_chat": bool(supports_chat),
                 "supports_embeddings": bool(supports_embeddings),
                 "providers": self._parse_csv_list(providers),
@@ -333,12 +338,13 @@ class P2PService:
             self._known_peers[cleaned_peer_id] = peer
             peer_count = len(self._known_peers)
         self._logger.info(
-            "p2p_peer_upserted peer_id=%s node_name=%s node_mode=%s scope=%s status=%s health_score=%s supports_chat=%s supports_embeddings=%s providers=%s models=%s base_url=%s total_known_peers=%s",
+            "p2p_peer_upserted peer_id=%s node_name=%s node_mode=%s scope=%s status=%s direct_provider_access=%s health_score=%s supports_chat=%s supports_embeddings=%s providers=%s models=%s base_url=%s total_known_peers=%s",
             cleaned_peer_id,
             peer["node_name"],
             peer["node_mode"],
             peer["scope"],
             peer["status"],
+            peer["direct_provider_access"],
             peer["health_score"],
             peer["supports_chat"],
             peer["supports_embeddings"],
@@ -394,37 +400,58 @@ class P2PService:
         is_master_mode = runtime_node_mode == "master"
         is_master_cache_mode = runtime_node_mode == "master_cache"
         provider_configs = settings.get_provider_configs()
+        local_direct_provider_access = bool(provider_configs) and runtime_node_mode != "master_cache"
         local_provider_count = 0
-        local_routes: set[str] = set()
+        direct_provider_links: set[str] = set()
         local_role = "master" if is_master_mode else "master_cache" if is_master_cache_mode else runtime_node_mode
-        if runtime_p2p_enabled and is_master_mode:
+        if runtime_p2p_enabled and is_master_mode and local_direct_provider_access:
             local_provider_count = len(provider_configs)
             for provider_name in provider_configs.keys():
-                local_routes.add(f"master-node::{provider_name}")
+                direct_provider_links.add(f"{settings.P2P_NODE_NAME or 'master-node'}::{provider_name}")
 
         master_count = 1 if runtime_p2p_enabled and is_master_mode else 0
         peer_count = sum(1 for peer in peers if peer.get("node_mode") == "peer")
-        peer_provider_count = sum(len(peer.get("providers") or []) for peer in peers if peer.get("runtime_status") == "online")
-        unique_live_routes: set[str] = set(local_routes)
+        direct_peer_count = sum(
+            1
+            for peer in peers
+            if peer.get("node_mode") == "peer"
+            and peer.get("runtime_status") == "online"
+            and peer.get("direct_provider_access")
+        )
+        link_only_peer_count = sum(
+            1
+            for peer in peers
+            if peer.get("node_mode") == "peer"
+            and peer.get("runtime_status") == "online"
+            and not peer.get("direct_provider_access")
+        )
+        peer_provider_count = sum(
+            len(peer.get("providers") or [])
+            for peer in peers
+            if peer.get("runtime_status") == "online" and peer.get("direct_provider_access")
+        )
         for peer in peers:
-            if peer.get("runtime_status") != "online":
+            if peer.get("runtime_status") != "online" or not peer.get("direct_provider_access"):
                 continue
             peer_id = peer.get("peer_id") or peer.get("node_name") or "peer"
             for provider_name in peer.get("providers") or []:
-                unique_live_routes.add(f"{peer_id}::{provider_name}")
+                direct_provider_links.add(f"{peer_id}::{provider_name}")
 
         network_map = {
             "master_nodes": {
                 "count": master_count,
-                "provider_count": local_provider_count,
+                "direct_provider_count": local_provider_count,
+                "direct_provider_access": local_direct_provider_access,
                 "role": local_role,
             },
             "peer_nodes": {
                 "count": peer_count,
-                "provider_count": peer_provider_count,
+                "direct_provider_count": peer_provider_count,
+                "direct_peer_count": direct_peer_count,
+                "link_only_peer_count": link_only_peer_count,
             },
             "routes": {
-                "unique_live_routes": len(unique_live_routes),
+                "direct_provider_links": len(direct_provider_links),
             },
         }
 
@@ -442,6 +469,7 @@ class P2PService:
                 "allow_master": settings.P2P_ALLOW_MASTER,
                 "accept_remote_tasks": settings.P2P_ACCEPT_REMOTE_TASKS,
                 "share_capacity": settings.P2P_SHARE_CAPACITY,
+                "direct_provider_access": local_direct_provider_access,
                 "shared_rpm_ratio": self._safe_ratio(settings.P2P_SHARED_RPM_RATIO),
                 "shared_tpm_ratio": self._safe_ratio(settings.P2P_SHARED_TPM_RATIO),
             },

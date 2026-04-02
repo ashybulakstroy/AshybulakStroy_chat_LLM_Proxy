@@ -20,22 +20,32 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Segoe UI", Tahoma, sans-serif;
+      font-family: Georgia, "Times New Roman", serif;
       background:
         radial-gradient(circle at top right, #e4efe8, transparent 26%),
         linear-gradient(180deg, #f6f3ec 0%, var(--bg) 100%);
       color: var(--ink);
     }
-    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 28px 18px 40px; }
     .hero, .panel {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 10px 30px rgba(31, 42, 48, 0.06);
+      border-radius: 24px;
+      box-shadow: 0 14px 36px rgba(31, 45, 43, 0.08);
     }
     .hero { padding: 24px; margin-bottom: 18px; }
-    .hero h1 { margin: 0 0 8px; font-size: 28px; }
-    .hero p { margin: 0; color: var(--muted); }
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 52px);
+      line-height: 0.95;
+    }
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 900px;
+      font-size: 16px;
+      line-height: 1.5;
+    }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -43,26 +53,39 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       margin-bottom: 18px;
     }
     .panel { padding: 18px; }
-    .panel h2 { margin: 0 0 12px; font-size: 16px; }
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 24px;
+      line-height: 1.1;
+    }
     .metric {
       display: flex;
       justify-content: space-between;
       gap: 12px;
-      padding: 8px 0;
-      border-top: 1px solid #eee6d8;
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
     }
     .metric:first-of-type { border-top: 0; }
-    .k { color: var(--muted); }
-    .v { font-weight: 600; text-align: right; }
+    .k {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .v {
+      font-weight: 700;
+      text-align: right;
+      font-size: 24px;
+      line-height: 1.1;
+    }
     .badge {
       display: inline-block;
-      padding: 6px 10px;
+      padding: 3px 9px;
       border-radius: 999px;
       background: var(--accent-soft);
       color: var(--accent);
       font-weight: 700;
       font-size: 12px;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
     }
     .ok { color: var(--ok); font-weight: 700; }
@@ -88,35 +111,46 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
     }
     input, select, button {
       width: 100%;
-      border-radius: 10px;
+      border-radius: 999px;
       border: 1px solid var(--line);
-      padding: 10px 12px;
+      padding: 10px 16px;
       font: inherit;
       background: white;
+      font-size: 14px;
     }
     button {
       cursor: pointer;
       background: var(--accent);
       color: white;
       border: 0;
+      box-shadow: 0 14px 36px rgba(31, 45, 43, 0.08);
     }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 14px;
+      min-width: 760px;
     }
     th, td {
       text-align: left;
-      padding: 10px 8px;
-      border-top: 1px solid #eee6d8;
+      padding: 12px 10px;
+      border-top: 1px solid var(--line);
       vertical-align: top;
+      font-size: 14px;
+      line-height: 1.35;
     }
-    th { color: var(--muted); font-weight: 600; }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
     pre {
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      font-size: 13px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
       line-height: 1.45;
     }
   </style>
@@ -147,6 +181,31 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         </thead>
         <tbody id="network-map-table">
           <tr><td colspan="4">No network map data yet.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-bottom: 18px;">
+      <h2>Known Peers</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Peer ID</th>
+            <th>Name</th>
+            <th>Mode</th>
+            <th>Scope</th>
+            <th>Status</th>
+            <th>Route Type</th>
+            <th>Health</th>
+            <th>Capabilities</th>
+            <th>Providers / Models</th>
+            <th>Active</th>
+            <th>Heartbeat</th>
+            <th>URL</th>
+          </tr>
+        </thead>
+        <tbody id="peer-table">
+          <tr><td colspan="12">No peers discovered yet.</td></tr>
         </tbody>
       </table>
     </section>
@@ -201,6 +260,10 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
           <select id="peer-share-capacity">
             <option value="true">share_capacity=true</option>
             <option value="false">share_capacity=false</option>
+          </select>
+          <select id="peer-direct-provider-access">
+            <option value="true">direct_provider_access=true</option>
+            <option value="false">direct_provider_access=false</option>
           </select>
           <select id="peer-supports-chat">
             <option value="true">supports_chat=true</option>
@@ -269,30 +332,6 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       </article>
     </section>
 
-    <section class="panel" style="margin-bottom: 18px;">
-      <h2>Known Peers</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Peer ID</th>
-            <th>Name</th>
-            <th>Mode</th>
-            <th>Scope</th>
-            <th>Status</th>
-            <th>Health</th>
-            <th>Capabilities</th>
-            <th>Providers / Models</th>
-            <th>Active</th>
-            <th>Heartbeat</th>
-            <th>URL</th>
-          </tr>
-        </thead>
-        <tbody id="peer-table">
-          <tr><td colspan="11">No peers discovered yet.</td></tr>
-        </tbody>
-      </table>
-    </section>
-
     <section class="panel">
       <h2>Raw Status</h2>
       <pre id="raw-status">Loading...</pre>
@@ -314,7 +353,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
     function renderPeers(peers) {
       const tbody = document.getElementById("peer-table");
       if (!Array.isArray(peers) || peers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11">No peers discovered yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12">No peers discovered yet.</td></tr>';
         return;
       }
       tbody.innerHTML = peers.map((peer) => `
@@ -324,8 +363,9 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
           <td>${peer.node_mode || ""}</td>
           <td>${peer.scope || ""}</td>
           <td>${peer.runtime_status || peer.status || ""}</td>
+          <td>${peer.direct_provider_access ? "direct" : "link-only"}</td>
           <td>${peer.health_score ?? ""}</td>
-          <td>chat=${Boolean(peer.supports_chat)} / emb=${Boolean(peer.supports_embeddings)} / remote=${Boolean(peer.accept_remote_tasks)}</td>
+          <td>chat=${Boolean(peer.supports_chat)} / emb=${Boolean(peer.supports_embeddings)} / remote=${Boolean(peer.accept_remote_tasks)} / direct=${Boolean(peer.direct_provider_access)}</td>
           <td>${(peer.providers || []).join(", ")}<br>${(peer.models || []).slice(0, 3).join(", ")}</td>
           <td>${peer.active_sessions ?? 0}</td>
           <td>${peer.last_heartbeat_at || ""}</td>
@@ -344,20 +384,20 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         {
           segment: "Masters",
           count: networkMap.master_nodes?.count ?? 0,
-          providers: networkMap.master_nodes?.provider_count ?? 0,
-          notes: `role=${networkMap.master_nodes?.role ?? ""}`
+          providers: networkMap.master_nodes?.direct_provider_count ?? 0,
+          notes: `role=${networkMap.master_nodes?.role ?? ""} / direct=${Boolean(networkMap.master_nodes?.direct_provider_access)}`
         },
         {
           segment: "Peers",
           count: networkMap.peer_nodes?.count ?? 0,
-          providers: networkMap.peer_nodes?.provider_count ?? 0,
-          notes: "online peer providers total"
+          providers: networkMap.peer_nodes?.direct_provider_count ?? 0,
+          notes: `direct peers=${networkMap.peer_nodes?.direct_peer_count ?? 0} / link-only peers=${networkMap.peer_nodes?.link_only_peer_count ?? 0}`
         },
         {
-          segment: "Unique Live Routes",
-          count: networkMap.routes?.unique_live_routes ?? 0,
+          segment: "Direct Provider Links",
+          count: networkMap.routes?.direct_provider_links ?? 0,
           providers: "-",
-          notes: "unique alive provider routes across master + peers"
+          notes: "only node/provider links with direct provider access"
         }
       ];
       tbody.innerHTML = rows.map((row) => `
@@ -420,6 +460,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         models: document.getElementById("peer-models").value || "",
         accept_remote_tasks: document.getElementById("peer-accept-remote").value,
         share_capacity: document.getElementById("peer-share-capacity").value,
+        direct_provider_access: document.getElementById("peer-direct-provider-access").value,
         supports_chat: document.getElementById("peer-supports-chat").value,
         supports_embeddings: document.getElementById("peer-supports-embeddings").value
       });

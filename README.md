@@ -148,11 +148,19 @@ Current MVP scope:
 - dispatch preview for P2P selection
 - network map summary:
   - masters count
-  - master providers count
+  - master direct provider links count
   - peers count
-  - peer providers count
-  - unique live routes
+  - peer direct provider links count
+  - direct peers vs link-only peers
+  - direct provider links across the network
 - P2P logs with `p2p_...` prefixes
+
+Direct route capacity rules:
+
+- if a node has its own keys and reaches provider APIs directly, it is counted as `direct_provider_access=true`
+- if a node only points to another master/peer and does not own provider access, it is treated as `link-only`
+- `Network Map` capacity is now based only on direct provider links
+- `dispatch preview` skips link-only peers because they do not add real route capacity in the current MVP
 
 Main endpoints:
 
@@ -160,6 +168,11 @@ Main endpoints:
 - `/admin/p2p/status`
 - `/admin/p2p/peers`
 - `/admin/p2p/dispatch/preview`
+
+Admin layout notes:
+
+- `Known Peers` is rendered right after `Network Map`
+- peer table shows route type: `direct` or `link-only`
 
 Important limitation:
 
