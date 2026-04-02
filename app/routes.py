@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from app.admin_ui import ADMIN_PAGE_HTML
 from app.config import settings
 from app.rate_limits import rate_limit_store
 from app.router_service import ProviderRouter, UpstreamProvidersExhausted
@@ -30,14 +31,14 @@ GEMINI_FREE_TIER_PREFIXES = (
     "models/gemini-2.0-flash-lite",
     "models/gemma-",
 )
-TEST_PROMPT = "Ассаламу алейкум!. Верни Уа Алейкум Ассалам!"
-EXPECTED_TEST_REPLY = "уа алейкум ассалам"
+TEST_PROMPT = "РђСЃСЃР°Р»Р°РјСѓ Р°Р»РµР№РєСѓРј!. Р’РµСЂРЅРё РЈР° РђР»РµР№РєСѓРј РђСЃСЃР°Р»Р°Рј!"
+EXPECTED_TEST_REPLY = "СѓР° Р°Р»РµР№РєСѓРј Р°СЃСЃР°Р»Р°Рј"
 
-TEST_PROMPT = "Ассаламу алейкум!. Верни Уа Алейкум Ассалам!"
+TEST_PROMPT = "РђСЃСЃР°Р»Р°РјСѓ Р°Р»РµР№РєСѓРј!. Р’РµСЂРЅРё РЈР° РђР»РµР№РєСѓРј РђСЃСЃР°Р»Р°Рј!"
 EXPECTED_TEST_REPLIES = {
-    "ва алейкум ассалам",
-    "ва алейкум асс салам",
-    "وعليكم السلام",
+    "РІР° Р°Р»РµР№РєСѓРј Р°СЃСЃР°Р»Р°Рј",
+    "РІР° Р°Р»РµР№РєСѓРј Р°СЃСЃ СЃР°Р»Р°Рј",
+    "Щ€Ш№Щ„ЩЉЩѓЩ… Ш§Щ„ШіЩ„Ш§Щ…",
 }
 VALIDATED_LLM_JOB_STATE = {
     "status": "idle",
@@ -53,921 +54,19 @@ VALIDATED_LLM_JOB_STATE = {
     "error": None,
 }
 VALIDATED_LLM_JOB_TASK: asyncio.Task | None = None
+RUNTIME_DISPATCHER_CACHE: dict = {}
 
-ADMIN_PAGE_HTML = """<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AshybulakStroy AI HUB Admin</title>
-  <style>
-    :root {
-      --bg: #f5f0e6;
-      --paper: #fff9ef;
-      --ink: #1f2d2b;
-      --muted: #6c756f;
-      --line: #d9d2c5;
-      --accent: #0f766e;
-      --accent-2: #9a6700;
-      --good: #166534;
-      --warn: #9a6700;
-      --bad: #b91c1c;
-      --shadow: 0 14px 36px rgba(31, 45, 43, 0.08);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: Georgia, "Times New Roman", serif;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at top left, rgba(15,118,110,0.10), transparent 28%),
-        radial-gradient(circle at top right, rgba(154,103,0,0.12), transparent 24%),
-        linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
-    }
-    .wrap {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 28px 18px 40px;
-    }
-    .hero {
-      display: grid;
-      gap: 10px;
-      margin-bottom: 18px;
-    }
-    .eyebrow {
-      color: var(--accent);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.18em;
-      font-weight: 700;
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(28px, 4vw, 52px);
-      line-height: 0.95;
-    }
-    .lead {
-      margin: 0;
-      color: var(--muted);
-      max-width: 900px;
-      font-size: 16px;
-      line-height: 1.5;
-    }
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 6px;
-      align-items: center;
-    }
-    button {
-      appearance: none;
-      border: 0;
-      border-radius: 999px;
-      padding: 10px 16px;
-      font: inherit;
-      cursor: pointer;
-      color: white;
-      background: var(--accent);
-      box-shadow: var(--shadow);
-    }
-    button.secondary { background: var(--accent-2); }
-    .refresh-control {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: rgba(255, 249, 239, 0.9);
-      color: var(--muted);
-      box-shadow: var(--shadow);
-      font-size: 14px;
-    }
-    .refresh-control select {
-      border: 0;
-      background: transparent;
-      color: var(--ink);
-      font: inherit;
-      outline: none;
-    }
-    .panel {
-      background: rgba(255, 249, 239, 0.94);
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      padding: 18px;
-      box-shadow: var(--shadow);
-      margin-bottom: 16px;
-    }
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(140px, 1fr));
-      gap: 10px;
-    }
-    .stat {
-      background: rgba(15,118,110,0.05);
-      border: 1px solid rgba(15,118,110,0.12);
-      border-radius: 16px;
-      padding: 12px;
-    }
-    .label {
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 8px;
-    }
-    .value {
-      font-size: 24px;
-      font-weight: 700;
-    }
-    .sub {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.4;
-      margin-top: 4px;
-    }
-    .table-wrap {
-      overflow: auto;
-      border-radius: 16px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.55);
-    }
-    .group-stack {
-      display: grid;
-      gap: 16px;
-    }
-    .group-title {
-      margin: 0 0 10px;
-      font-size: 24px;
-      line-height: 1.1;
-    }
-    .group-sub {
-      color: var(--muted);
-      font-size: 13px;
-      margin: 0 0 12px;
-    }
-    .loading-box {
-      padding: 14px 16px;
-      border-radius: 16px;
-      border: 1px solid rgba(15,118,110,0.18);
-      background: rgba(15,118,110,0.06);
-      color: var(--accent);
-      font-size: 14px;
-      margin-bottom: 12px;
-    }
-    .progress-stack {
-      display: grid;
-      gap: 10px;
-      margin-top: 10px;
-    }
-    .progress-line {
-      display: grid;
-      gap: 6px;
-    }
-    .progress-meta {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .progress-track {
-      width: 100%;
-      height: 12px;
-      border-radius: 999px;
-      overflow: hidden;
-      background: rgba(15,118,110,0.10);
-      border: 1px solid rgba(15,118,110,0.12);
-    }
-    .progress-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--accent), #4aa39c);
-      transition: width 0.25s ease;
-    }
-    .recommendations {
-      display: grid;
-      gap: 10px;
-    }
-    .recommendation {
-      padding: 14px 16px;
-      border-radius: 16px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.58);
-    }
-    .recommendation-title {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 980px;
-    }
-    th, td {
-      padding: 12px 10px;
-      text-align: left;
-      vertical-align: top;
-      border-bottom: 1px solid var(--line);
-      font-size: 14px;
-      line-height: 1.35;
-    }
-    th {
-      position: sticky;
-      top: 0;
-      background: #f7f1e6;
-      z-index: 1;
-      font-size: 12px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-    tr.warn { background: rgba(250, 204, 21, 0.08); }
-    tr.error { background: rgba(248, 113, 113, 0.10); }
-    tr.trend-up { background: rgba(34, 197, 94, 0.12); }
-    tr.trend-down { background: rgba(239, 68, 68, 0.12); }
-    .pill {
-      display: inline-block;
-      padding: 3px 9px;
-      border-radius: 999px;
-      font-size: 12px;
-      background: rgba(15,118,110,0.10);
-      color: var(--accent);
-      white-space: nowrap;
-    }
-    .status-ok { color: var(--good); }
-    .status-warn { color: var(--warn); }
-    .status-error { color: var(--bad); }
-    .trend-icon {
-      margin-left: 6px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .trend-up-text { color: var(--good); }
-    .trend-down-text { color: var(--bad); }
-    .mono {
-      font-family: Consolas, "Courier New", monospace;
-      font-size: 12px;
-    }
-    .test-cell {
-      min-width: 220px;
-    }
-    .test-result {
-      margin-top: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .empty {
-      color: var(--muted);
-      padding: 18px 4px 4px;
-    }
-    .hidden-meta {
-      display: none;
-    }
-    @media (max-width: 900px) {
-      .stats { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <section class="hero">
-      <div class="eyebrow">Админка</div>
-      <h1>AshybulakStroy AI HUB</h1>
-      <p class="lead">Одна таблица сверху вниз: каждая строка это модель, а лимиты подтягиваются из live-наблюдений провайдера и сохранённой оценки RPM/RPD.</p>
-      <div class="actions">
-        <button id="refreshAll">Обновить</button>
-        <button id="refreshLive" class="secondary">Обновить live-лимиты</button>
-        <label class="refresh-control">
-          <span>Автообновление</span>
-          <select id="refreshInterval">
-            <option value="1">1 мин</option>
-            <option value="2">2 мин</option>
-            <option value="3" selected>3 мин</option>
-            <option value="4">4 мин</option>
-            <option value="5">5 мин</option>
-          </select>
-        </label>
-      </div>
-    </section>
 
-    <section class="panel">
-      <div class="label">Блок №1</div>
-      <div class="stats" id="overviewStats"></div>
-    </section>
+def _set_runtime_dispatcher_cache(payload: dict | None) -> dict:
+    global RUNTIME_DISPATCHER_CACHE
+    RUNTIME_DISPATCHER_CACHE = dict(payload or {})
+    return RUNTIME_DISPATCHER_CACHE
 
-    <section class="panel">
-      <div class="label">Блок №2</div>
-      <div class="label">Модели и лимиты</div>
-      <div id="loadingState" class="loading-box">Идет сбор данных и счетчиков. Подождите...</div>
-      <div class="group-stack" id="groupedTables">
-      </div>
-    </section>
 
-    <section class="panel">
-      <div class="label">Блок №3</div>
-      <div class="label">Рекомендации от ИИ</div>
-      <div id="recommendations" class="recommendations"></div>
-    </section>
-
-    <section class="panel">
-      <div class="label">Блок №4</div>
-      <div class="label">Проверенные модели LLM</div>
-      <div class="actions" style="margin-bottom: 12px;">
-        <button id="refreshValidatedLlm" class="secondary">Проверить оставшиеся LLM</button>
-      </div>
-      <div id="validatedLlmState" class="loading-box" style="display:none;"></div>
-      <div id="validatedLlmTables"></div>
-    </section>
-  </div>
-
-  <script>
-    const overviewStats = document.getElementById('overviewStats');
-    const groupedTables = document.getElementById('groupedTables');
-    const refreshInterval = document.getElementById('refreshInterval');
-    const loadingState = document.getElementById('loadingState');
-    const recommendationsNode = document.getElementById('recommendations');
-    const validatedLlmNode = document.getElementById('validatedLlmTables');
-    const validatedLlmState = document.getElementById('validatedLlmState');
-    let autoRefreshHandle = null;
-    let validatedLlmProgressHandle = null;
-    const trendStorageKey = 'ashybulak_admin_trends_v1';
-
-    function fmt(value) {
-      return value === null || value === undefined || value === '' ? 'n/a' : String(value);
-    }
-
-    function percent(current, total) {
-      if (!total) return 0;
-      return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
-    }
-
-    function statCard(label, value, extra = '') {
-      return `
-        <div class="stat">
-          <div class="label">${label}</div>
-          <div class="value">${fmt(value)}</div>
-          ${extra ? `<div class="sub">${extra}</div>` : ''}
-        </div>
-      `;
-    }
-
-    function observedRpm(item) {
-      return item?.limits?.requests?.minute?.limit ?? item?.limits?.rpm ?? null;
-    }
-
-    function observedRpd(item) {
-      return item?.limits?.requests?.day?.limit ?? item?.limits?.rpd ?? null;
-    }
-
-    function remainingRpm(item) {
-      return item?.limits?.requests?.minute?.remaining ?? item?.limits?.rpm_remaining ?? null;
-    }
-
-    function remainingRpd(item) {
-      return item?.limits?.requests?.day?.remaining ?? item?.limits?.rpd_remaining ?? null;
-    }
-
-    function remainingTokensMinute(item) {
-      return item?.limits?.tokens?.minute?.remaining ?? null;
-    }
-
-    function getTrendState() {
-      try {
-        return JSON.parse(localStorage.getItem(trendStorageKey) || '{}');
-      } catch {
-        return {};
-      }
-    }
-
-    function setTrendState(value) {
-      localStorage.setItem(trendStorageKey, JSON.stringify(value));
-    }
-
-    function trendKey(model) {
-      return `${model.provider || 'unknown'}::${model.id || 'unknown'}`;
-    }
-
-    function numericOrNull(value) {
-      if (value === null || value === undefined || value === '' || value === 'n/a') {
-        return null;
-      }
-      const parsed = Number(value);
-      return Number.isNaN(parsed) ? null : parsed;
-    }
-
-    function formatGmtPlus5(value) {
-      if (!value) return 'n/a';
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) return String(value);
-      const shifted = new Date(parsed.getTime() + (5 * 60 * 60 * 1000));
-      const pad = (n) => String(n).padStart(2, '0');
-      return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())} ` +
-        `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}`;
-    }
-
-    function rowStatus(liveItem, estimate) {
-      if (liveItem?.last_error) {
-        return { text: 'ошибка', cls: 'status-error', row: 'error' };
-      }
-      if (liveItem?.limits?.source === 'fallback_default') {
-        return { text: 'fallback', cls: 'status-warn', row: 'warn' };
-      }
-      const liveRpm = observedRpm(liveItem);
-      if (estimate?.estimated_rpm && liveRpm && String(estimate.estimated_rpm) !== String(liveRpm)) {
-        return { text: 'расхождение', cls: 'status-warn', row: 'warn' };
-      }
-      return { text: 'ok', cls: 'status-ok', row: '' };
-    }
-
-    function maxBundle(liveItem, estimate) {
-      return {
-        maxRpm: observedRpm(liveItem) ?? estimate?.estimated_rpm ?? null,
-        maxRpd: observedRpd(liveItem) ?? estimate?.estimated_rpd ?? null,
-        maxTpm: liveItem?.limits?.tokens?.minute?.limit ?? null,
-      };
-    }
-
-    function rowHtml(model, liveItem, estimate, trendInfo) {
-      const provider = model.provider || 'unknown';
-      const status = rowStatus(liveItem, estimate);
-      const maxValues = maxBundle(liveItem, estimate);
-      const trendIcon = trendInfo.direction === 'up'
-        ? '<span class="trend-icon trend-up-text">↑</span>'
-        : trendInfo.direction === 'down'
-          ? '<span class="trend-icon trend-down-text">↓</span>'
-          : '';
-      const rowClass = trendInfo.highlightClass || status.row;
-      return `
-        <tr class="${rowClass}">
-          <td><span class="pill">${fmt(provider)}</span></td>
-          <td class="mono">${fmt(model.id)}</td>
-          <td>${fmt(remainingRpm(liveItem))}${trendIcon}</td>
-          <td>${fmt(remainingRpd(liveItem))}</td>
-          <td>${fmt(remainingTokensMinute(liveItem))}</td>
-          <td class="hidden-meta">RPM: ${fmt(maxValues.maxRpm)} | RPD: ${fmt(maxValues.maxRpd)} | TPM: ${fmt(maxValues.maxTpm)}</td>
-          <td>${fmt(liveItem?.limits?.source)}</td>
-          <td class="${status.cls}">${status.text}</td>
-          <td class="mono">${formatGmtPlus5(liveItem?.last_observed_at)}</td>
-          <td class="test-cell">
-            <button data-provider="${provider}" data-model="${fmt(model.id)}">Проверить</button>
-            <div class="test-result" id="test-result-${provider}-${fmt(model.id).replace(/[^a-zA-Z0-9_-]/g, '_')}"></div>
-          </td>
-        </tr>
-      `;
-    }
-
-    function validatedRowHtml(model) {
-      const provider = model.provider || 'unknown';
-      const validation = model._validation || {};
-      return `
-        <tr>
-          <td><span class="pill">${fmt(provider)}</span></td>
-          <td class="mono">${fmt(model.id)}</td>
-          <td>${fmt(validation.message_excerpt)}</td>
-          <td class="mono">${formatGmtPlus5(validation.validated_at)}</td>
-          <td class="test-cell">
-            <button data-provider="${provider}" data-model="${fmt(model.id)}">Проверить</button>
-            <div class="test-result" id="test-result-${provider}-${fmt(model.id).replace(/[^a-zA-Z0-9_-]/g, '_')}"></div>
-          </td>
-        </tr>
-      `;
-    }
-
-    function categoryForModel(model) {
-      const id = String(model?.id || '').toLowerCase();
-      const name = String(model?.name || '').toLowerCase();
-      const description = String(model?.description || '').toLowerCase();
-      const hay = `${id} ${name} ${description}`;
-
-      const audioHints = ['whisper', 'transcribe', 'transcription', 'speech-to-text', 'stt', 'asr', 'audio'];
-      const videoHints = ['video', 'veo', 'sora', 'movie', 'clip', 'vision-video', 'gen-video'];
-
-      if (audioHints.some((hint) => hay.includes(hint))) {
-        return 'audio';
-      }
-      if (videoHints.some((hint) => hay.includes(hint))) {
-        return 'video';
-      }
-      if (
-        hay.includes('chat') ||
-        hay.includes('instruct') ||
-        hay.includes('llama') ||
-        hay.includes('gpt') ||
-        hay.includes('gemini') ||
-        hay.includes('qwen') ||
-        hay.includes('deepseek') ||
-        hay.includes('claude') ||
-        hay.includes('mistral') ||
-        hay.includes('command') ||
-        hay.includes('language') ||
-        hay.includes('reason') ||
-        hay.includes('completion')
-      ) {
-        return 'llm';
-      }
-      return 'other';
-    }
-
-    function isOkStatus(liveItem, estimate) {
-      return rowStatus(liveItem, estimate).text === 'ok';
-    }
-
-    function resourceWeight(model, liveItem) {
-      const context = numericOrNull(model?.context_length ?? model?.context_window);
-      const completion = numericOrNull(model?.max_completion_tokens ?? model?.top_provider?.max_completion_tokens);
-      const liveRpm = numericOrNull(observedRpm(liveItem));
-      const liveRpd = numericOrNull(observedRpd(liveItem));
-      const hasLive = liveItem?.limits?.source === 'response_headers' ? 1 : 0;
-      return {
-        hasLive,
-        context: context ?? 0,
-        completion: completion ?? 0,
-        liveRpm: liveRpm ?? 0,
-        liveRpd: liveRpd ?? 0,
-      };
-    }
-
-    function compareModelsByPriority(a, b) {
-      const left = a.weight;
-      const right = b.weight;
-      if (right.hasLive !== left.hasLive) return right.hasLive - left.hasLive;
-      if (right.context !== left.context) return right.context - left.context;
-      if (right.completion !== left.completion) return right.completion - left.completion;
-      if (right.liveRpd !== left.liveRpd) return right.liveRpd - left.liveRpd;
-      if (right.liveRpm !== left.liveRpm) return right.liveRpm - left.liveRpm;
-      return String(a.model.id).localeCompare(String(b.model.id));
-    }
-
-    function recommendationCard(title, text) {
-      return `
-        <div class="recommendation">
-          <div class="recommendation-title">${title}</div>
-          <div>${text}</div>
-        </div>
-      `;
-    }
-
-    function buildRecommendations(health, models) {
-      const providers = Object.entries(health.limits || {})
-        .map(([provider, item]) => ({
-          provider,
-          source: item?.limits?.source,
-          rpmRemaining: numericOrNull(remainingRpm(item)),
-          rpdRemaining: numericOrNull(remainingRpd(item)),
-          tpmRemaining: numericOrNull(remainingTokensMinute(item)),
-        }))
-        .filter((item) => item.source === 'response_headers');
-
-      if (!providers.length) {
-        return [
-          recommendationCard('Живых рекомендаций пока нет', 'Провайдеры ещё не отдали live-счётчики. Нажмите "Обновить live-лимиты" и подождите завершения сбора данных.')
-        ].join('');
-      }
-
-      const bestByRpm = [...providers].sort((a, b) => (b.rpmRemaining ?? -1) - (a.rpmRemaining ?? -1))[0];
-      const lowestByRpm = [...providers].sort((a, b) => (a.rpmRemaining ?? Number.MAX_SAFE_INTEGER) - (b.rpmRemaining ?? Number.MAX_SAFE_INTEGER))[0];
-      const bestByTokens = [...providers].sort((a, b) => (b.tpmRemaining ?? -1) - (a.tpmRemaining ?? -1))[0];
-      const modelCounts = providers.map((item) => {
-        const count = (models.data || []).filter((model) => model.provider === item.provider).length;
-        return { provider: item.provider, count };
-      }).sort((a, b) => b.count - a.count);
-
-      return [
-        recommendationCard(
-          'Куда лучше отправлять запросы сейчас',
-          bestByRpm
-            ? `Сейчас самый свободный по остаткам RPM провайдер — ${bestByRpm.provider}. Осталось примерно ${fmt(bestByRpm.rpmRemaining)} RPM.`
-            : 'Недостаточно данных по RPM.'
-        ),
-        recommendationCard(
-          'Где ресурс заканчивается быстрее всего',
-          lowestByRpm
-            ? `Ближе всего к исчерпанию сейчас ${lowestByRpm.provider}. Остаток RPM: ${fmt(lowestByRpm.rpmRemaining)}.`
-            : 'Недостаточно данных по RPM.'
-        ),
-        recommendationCard(
-          'Кто лучше для тяжёлых запросов',
-          bestByTokens
-            ? `Если запросы крупные по токенам, сейчас логичнее смотреть на ${bestByTokens.provider}. Осталось токенов в минуту: ${fmt(bestByTokens.tpmRemaining)}.`
-            : 'Провайдеры не отдали счётчики токенов в минуту.'
-        ),
-        recommendationCard(
-          'Где сейчас больше всего пригодных моделей',
-          modelCounts[0]
-            ? `Больше всего моделей со статусом OK и live-лимитами сейчас у провайдера ${modelCounts[0].provider}: ${modelCounts[0].count}.`
-            : 'Нет данных по моделям.'
-        ),
-      ].join('');
-    }
-
-    function groupSection(title, subtitle, rowsHtml) {
-      return `
-        <section>
-          <h2 class="group-title">${title}</h2>
-          <p class="group-sub">${subtitle}</p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Провайдер</th>
-                  <th>Модель</th>
-                  <th>Осталось RPM</th>
-                  <th>Осталось RPD</th>
-                  <th>Осталось токенов/мин</th>
-                  <th class="hidden-meta">Макс</th>
-                  <th>Источник</th>
-                  <th>Статус</th>
-                  <th>Последнее наблюдение</th>
-                  <th>Проверка</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml || `<tr><td colspan="10" class="empty">В этой группе моделей нет</td></tr>`}</tbody>
-            </table>
-          </div>
-        </section>
-      `;
-    }
-
-    function validatedGroupSection(rowsHtml, meta) {
-      return `
-        <section>
-          <h2 class="group-title">Проверенные модели LLM</h2>
-          <p class="group-sub">LLM-модели вне Блока №2, которые прошли отдельную текстовую проверку. Последняя проверка: ${fmt(formatGmtPlus5(meta?.validated_at))}. Данные загружены из кэша. Кэш обновлён: ${fmt(formatGmtPlus5(meta?.cache_created_at))}.</p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Провайдер</th>
-                  <th>Модель</th>
-                  <th>Ответ на тест</th>
-                  <th>Последняя проверка</th>
-                  <th>Проверка</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml || `<tr><td colspan="5" class="empty">Пока нет отдельно проверенных LLM-моделей</td></tr>`}</tbody>
-            </table>
-          </div>
-        </section>
-      `;
-    }
-
-    function renderValidatedLlmProgress(job) {
-      const total = Number(job?.total_models || 0);
-      const requestsStarted = Number(job?.requests_started || 0);
-      const responsesReceived = Number(job?.responses_received || 0);
-      const requestsPercent = percent(requestsStarted, total);
-      const responsesPercent = percent(responsesReceived, total);
-
-      if (!job?.running && !job?.last_started_at) {
-        validatedLlmState.style.display = 'none';
-        validatedLlmState.innerHTML = '';
-        return;
-      }
-
-      validatedLlmState.style.display = 'block';
-      validatedLlmState.innerHTML = `
-        <div>Идет проверка оставшихся LLM-моделей. Подождите...</div>
-        <div class="progress-stack">
-          <div class="progress-line">
-            <div class="progress-meta">
-              <span>Запросы на тестирование</span>
-              <span>${requestsStarted} / ${total} (${requestsPercent}%)</span>
-            </div>
-            <div class="progress-track"><div class="progress-fill" style="width:${requestsPercent}%"></div></div>
-          </div>
-          <div class="progress-line">
-            <div class="progress-meta">
-              <span>Полученные ответы</span>
-              <span>${responsesReceived} / ${total} (${responsesPercent}%)</span>
-            </div>
-            <div class="progress-track"><div class="progress-fill" style="width:${responsesPercent}%"></div></div>
-          </div>
-          <div class="sub">Статус: ${fmt(job?.status)}. Успешно: ${fmt(job?.passed)}. Не прошло: ${fmt(job?.failed)}.</div>
-        </div>
-      `;
-    }
-
-    async function getValidatedLlmJobStatus() {
-      return getJson('/admin/models/validate-remaining-llm/status');
-    }
-
-    async function syncValidatedLlmJobStatus({ reloadOnFinish = false } = {}) {
-      try {
-        const job = await getValidatedLlmJobStatus();
-        renderValidatedLlmProgress(job);
-        if (!job.running && validatedLlmProgressHandle) {
-          clearInterval(validatedLlmProgressHandle);
-          validatedLlmProgressHandle = null;
-          if (reloadOnFinish) {
-            await loadDashboard();
-          }
-        }
-        return job;
-      } catch (error) {
-        validatedLlmState.style.display = 'block';
-        validatedLlmState.innerHTML = `<div class="status-error">${error.message}</div>`;
-        throw error;
-      }
-    }
-
-    function startValidatedLlmProgressPolling() {
-      if (validatedLlmProgressHandle) {
-        clearInterval(validatedLlmProgressHandle);
-      }
-      validatedLlmProgressHandle = setInterval(() => {
-        syncValidatedLlmJobStatus({ reloadOnFinish: true });
-      }, 3000);
-    }
-
-    async function loadValidatedLlmBlock() {
-      try {
-        const [payload, job] = await Promise.all([
-          getJson('/admin/models/validated-llm'),
-          getValidatedLlmJobStatus()
-        ]);
-        const rows = (payload.data || []).map((model) => validatedRowHtml(model)).join('');
-        validatedLlmNode.innerHTML = validatedGroupSection(rows, payload.meta || {});
-        renderValidatedLlmProgress(job);
-        if (job?.running) {
-          startValidatedLlmProgressPolling();
-        } else if ((!payload.data || payload.data.length === 0) && !job?.running && !job?.last_started_at) {
-          await refreshValidatedLlm('auto');
-          return;
-        }
-        wireProviderTests();
-      } catch (error) {
-        validatedLlmNode.innerHTML = `<div class="status-error">${error.message}</div>`;
-      }
-    }
-
-    async function getJson(url, options = {}) {
-      const response = await fetch(url, options);
-      if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`);
-      }
-      return response.json();
-    }
-
-    async function loadDashboard() {
-      loadingState.style.display = 'block';
-      groupedTables.innerHTML = '';
-      recommendationsNode.innerHTML = recommendationCard('Идет анализ', 'Собираем live-счетчики и готовим рекомендации...');
-      validatedLlmNode.innerHTML = '';
-      try {
-        const [health, models, estimates] = await Promise.all([
-          getJson('/health/limits'),
-          getJson('/admin/models/available'),
-          getJson('/admin/limits/estimated')
-        ]);
-        const previousTrendState = getTrendState();
-        const nextTrendState = {};
-
-        overviewStats.innerHTML = [
-          statCard('Сервис', health.status),
-          statCard('Провайдеры', health.providers_count),
-          statCard('Модели', (models.data || []).length, `после фильтра из: ${fmt(models.meta?.total_before_filter)}`),
-          statCard('Последний probe', formatGmtPlus5(health.startup_probe?.last_probe_at), `успешно: ${fmt(health.startup_probe?.summary?.successful?.length || 0)}`)
-        ].join('');
-
-        const grouped = {
-          llm: [],
-          audio: [],
-          video: [],
-          other: [],
-        };
-
-        const preparedRows = [];
-
-        (models.data || []).forEach((model) => {
-          const liveItem = (health.limits || {})[model.provider] || {};
-          const estimate = (estimates.providers || {})[model.provider] || {};
-          if (!isOkStatus(liveItem, estimate)) {
-            return;
-          }
-          const category = categoryForModel(model);
-          const key = trendKey(model);
-          const previous = previousTrendState[key] || {};
-          const currentRpm = numericOrNull(observedRpm(liveItem));
-          const currentRpd = numericOrNull(observedRpd(liveItem));
-          let direction = previous.direction || '';
-          let highlightClass = '';
-
-          if (currentRpm !== null && previous.rpm !== null && previous.rpm !== undefined && currentRpm !== previous.rpm) {
-            if (currentRpm > previous.rpm) {
-              direction = 'up';
-              highlightClass = 'trend-up';
-            } else {
-              direction = 'down';
-              highlightClass = 'trend-down';
-            }
-          } else if (currentRpm === null && currentRpd !== null && previous.rpd !== null && previous.rpd !== undefined && currentRpd !== previous.rpd) {
-            if (currentRpd > previous.rpd) {
-              direction = 'up';
-              highlightClass = 'trend-up';
-            } else {
-              direction = 'down';
-              highlightClass = 'trend-down';
-            }
-          }
-
-          nextTrendState[key] = {
-            rpm: currentRpm,
-            rpd: currentRpd,
-            direction,
-          };
-
-          preparedRows.push({
-            category,
-            model,
-            liveItem,
-            estimate,
-            trendInfo: { direction, highlightClass },
-            weight: resourceWeight(model, liveItem),
-          });
-        });
-        preparedRows.sort(compareModelsByPriority);
-        preparedRows.forEach((item) => {
-          grouped[item.category].push(rowHtml(item.model, item.liveItem, item.estimate, item.trendInfo));
-        });
-        setTrendState(nextTrendState);
-
-        groupedTables.innerHTML = [
-          groupSection('LLM модели', 'Все языковые модели всех поставщиков.', grouped.llm.join('')),
-          groupSection('Аудио распознавание', 'Модели распознавания речи и транскрибации.', grouped.audio.join('')),
-          groupSection('Видео модели', 'Видео-модели и связанные генеративные видео сервисы.', grouped.video.join('')),
-          groupSection('Остальные модели', 'Все остальные модели, которые не попали в первые три группы.', grouped.other.join('')),
-        ].join('');
-        recommendationsNode.innerHTML = buildRecommendations(health, models);
-        await loadValidatedLlmBlock();
-        loadingState.style.display = 'none';
-
-        wireProviderTests();
-      } catch (error) {
-        overviewStats.innerHTML = [
-          statCard('Сервис', 'failed'),
-          statCard('Ошибка', error.message)
-        ].join('');
-        groupedTables.innerHTML = `<div class="status-error">${error.message}</div>`;
-        recommendationsNode.innerHTML = recommendationCard('Ошибка анализа', error.message);
-        validatedLlmNode.innerHTML = `<div class="status-error">${error.message}</div>`;
-        loadingState.style.display = 'none';
-      }
-    }
-
-    async function refreshLive() {
-      await getJson('/health/limits/live', { method: 'POST' });
-      await loadDashboard();
-    }
-
-    async function refreshValidatedLlm(startedBy = 'manual') {
-      const payload = await getJson(`/admin/models/validate-remaining-llm?started_by=${encodeURIComponent(startedBy)}`, { method: 'POST' });
-      renderValidatedLlmProgress(payload.job || payload);
-      startValidatedLlmProgressPolling();
-    }
-
-    function resultNodeId(provider, model) {
-      return `test-result-${provider}-${String(model).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-    }
-
-    async function testProvider(provider, model) {
-      const resultNode = document.getElementById(resultNodeId(provider, model));
-      if (resultNode) resultNode.textContent = 'проверка...';
-      try {
-        const url = `/admin/test?provider_name=${encodeURIComponent(provider)}&model_id=${encodeURIComponent(model)}`;
-        const payload = await getJson(url, { method: 'POST' });
-        if (resultNode) resultNode.textContent = `${payload.model}: ${payload.message_excerpt || 'ok'}`;
-      } catch (error) {
-        if (resultNode) resultNode.textContent = error.message;
-      }
-    }
-
-    function wireProviderTests() {
-      document.querySelectorAll('[data-provider]').forEach((button) => {
-        const provider = button.dataset.provider;
-        const model = button.dataset.model;
-        button.onclick = () => testProvider(provider, model);
-      });
-    }
-
-    function startAutoRefresh() {
-      if (autoRefreshHandle) clearInterval(autoRefreshHandle);
-      const minutes = Number(refreshInterval.value || 3);
-      autoRefreshHandle = setInterval(loadDashboard, minutes * 60 * 1000);
-    }
-
-    document.getElementById('refreshAll').addEventListener('click', loadDashboard);
-    document.getElementById('refreshLive').addEventListener('click', refreshLive);
-    document.getElementById('refreshValidatedLlm').addEventListener('click', refreshValidatedLlm);
-    refreshInterval.addEventListener('change', startAutoRefresh);
-    loadDashboard();
-    startAutoRefresh();
-  </script>
-</body>
-</html>
-"""
+def _get_runtime_dispatcher_cache() -> dict:
+    if not RUNTIME_DISPATCHER_CACHE:
+        return _set_runtime_dispatcher_cache(_load_admin_cache())
+    return RUNTIME_DISPATCHER_CACHE
 
 
 def _load_estimated_limits() -> dict:
@@ -1000,6 +99,42 @@ def _load_admin_cache() -> dict:
 
 def _save_admin_cache(payload: dict) -> None:
     ADMIN_CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+_set_runtime_dispatcher_cache(_load_admin_cache())
+
+
+async def _last_session_index(limit: int = 100) -> dict[str, dict]:
+    sessions = await provider_router.get_completed_sessions(limit)
+    index: dict[str, dict] = {}
+    for session in sessions:
+        provider_name = session.get("provider")
+        model_id = session.get("model")
+        if not provider_name or not model_id:
+            continue
+        key = _model_validation_key(provider_name, model_id)
+        if key in index:
+            continue
+        index[key] = {
+            "last_session_status": session.get("status"),
+            "last_session_status_code": session.get("status_code"),
+            "last_session_error": session.get("detail"),
+            "last_session_at": session.get("finished_at") or session.get("started_at"),
+            "last_session_mode": session.get("mode"),
+        }
+    return index
+
+
+def _apply_last_session_index(cache_payload: dict, sessions_index: dict[str, dict]) -> dict:
+    for route in cache_payload.get("routes", []):
+        key = _model_validation_key(route.get("provider", ""), route.get("model_id", ""))
+        session = sessions_index.get(key, {})
+        route["last_session_status"] = session.get("last_session_status")
+        route["last_session_status_code"] = session.get("last_session_status_code")
+        route["last_session_error"] = session.get("last_session_error")
+        route["last_session_at"] = session.get("last_session_at")
+        route["last_session_mode"] = session.get("last_session_mode")
+    return cache_payload
 
 
 def _get_validated_llm_job_state() -> dict:
@@ -1129,13 +264,28 @@ def _refresh_admin_cache(
     )
     cache_payload.update(dispatcher_payload)
     _save_admin_cache(cache_payload)
+    return _set_runtime_dispatcher_cache(cache_payload)
+
+
+async def _refresh_admin_cache_async(
+    all_models: list[dict] | None = None,
+    block_two_payload: dict | None = None,
+    validated_llm_payload: dict | None = None,
+) -> dict:
+    cache_payload = _refresh_admin_cache(
+        all_models=all_models,
+        block_two_payload=block_two_payload,
+        validated_llm_payload=validated_llm_payload,
+    )
+    cache_payload = _apply_last_session_index(cache_payload, await _last_session_index())
+    _save_admin_cache(cache_payload)
     return cache_payload
 
 
 def _normalize_test_reply(value: str | None) -> str:
     if not value:
         return ""
-    lowered = value.lower().replace("ё", "е")
+    lowered = value.lower().replace("С‘", "Рµ")
     return "".join(ch for ch in lowered if ch.isalnum() or ch.isspace()).strip()
 
 
@@ -1144,9 +294,9 @@ def _normalize_test_reply(value: str | None) -> str:
         return ""
     lowered = (
         value.lower()
-        .replace("ё", "е")
+        .replace("С‘", "Рµ")
         .replace("-", " ")
-        .replace("уа ", "ва ")
+        .replace("СѓР° ", "РІР° ")
     )
     return "".join(ch for ch in lowered if ch.isalnum() or ch.isspace()).strip()
 
@@ -1353,7 +503,7 @@ async def _run_validated_llm_job(started_by: str) -> None:
 
         validation_payload = _load_model_validation_results()
         validated_llm_payload = _build_validated_llm_cache_payload(remaining_models, validation_payload)
-        _refresh_admin_cache(
+        await _refresh_admin_cache_async(
             all_models=all_models,
             block_two_payload=block_two_payload,
             validated_llm_payload=validated_llm_payload,
@@ -1449,6 +599,13 @@ def _filter_models_with_live_limits(models: list[dict]) -> list[dict]:
         for provider, item in snapshot.items()
         if item.get("limits", {}).get("source") == "response_headers"
     }
+    if not providers_with_live_limits:
+        estimated_limits = _load_estimated_limits().get("providers", {})
+        providers_with_live_limits = {
+            provider
+            for provider, item in estimated_limits.items()
+            if isinstance(item, dict) and (isinstance(item.get("estimated_rpm"), int) or isinstance(item.get("estimated_rpd"), int))
+        }
     return [
         model
         for model in models
@@ -1486,46 +643,115 @@ def _remaining_tpm(item: dict) -> int | None:
     return item.get("limits", {}).get("tokens", {}).get("minute", {}).get("remaining")
 
 
-def _pick_auto_provider(chat_models: list[dict]) -> str | None:
+def _is_auto_value(value: str | None) -> bool:
+    return str(value or "").strip().lower() == "auto"
+
+
+def _estimated_provider_limits(provider_name: str) -> tuple[int, int]:
+    estimated = _load_estimated_limits().get("providers", {}).get(provider_name, {})
+    rpm = estimated.get("estimated_rpm")
+    rpd = estimated.get("estimated_rpd")
+    return (
+        rpm if isinstance(rpm, int) else -1,
+        rpd if isinstance(rpd, int) else -1,
+    )
+
+
+def _runtime_chat_models() -> list[dict]:
+    cache = _get_runtime_dispatcher_cache()
+    block_two_models = (cache.get("block_two") or {}).get("data") or []
+    if block_two_models:
+        return [model for model in block_two_models if isinstance(model, dict)]
+
+    routes = cache.get("routes") or []
+    return [
+        {
+            "provider": route.get("provider"),
+            "id": route.get("model_id"),
+            "category": route.get("category"),
+        }
+        for route in routes
+        if isinstance(route, dict) and route.get("provider") and route.get("model_id")
+    ]
+
+
+def _pick_auto_route(
+    chat_models: list[dict],
+    requested_provider: str | None = None,
+    requested_model: str | None = None,
+) -> dict[str, str] | None:
     provider_names = list(settings.get_provider_configs().keys())
     snapshot = rate_limit_store.get_snapshot(provider_names)
-    provider_candidates: list[dict] = []
+    filtered_models = [
+        model
+        for model in chat_models
+        if _category_for_model(model) == "llm"
+        and (
+            _is_auto_value(requested_provider)
+            or not requested_provider
+            or model.get("provider") == requested_provider
+        )
+        and (
+            _is_auto_value(requested_model)
+            or not requested_model
+            or model.get("id") == requested_model
+        )
+    ]
+    if not filtered_models:
+        return None
 
-    for provider_name, item in snapshot.items():
-        if item.get("limits", {}).get("source") != "response_headers":
+    models_count_by_provider: dict[str, int] = {}
+    for model in filtered_models:
+        provider_name = model.get("provider")
+        if provider_name:
+            models_count_by_provider[provider_name] = models_count_by_provider.get(provider_name, 0) + 1
+
+    route_candidates: list[dict] = []
+    for index, model in enumerate(filtered_models):
+        provider_name = model.get("provider")
+        if not provider_name:
+            continue
+        item = snapshot.get(provider_name, {})
+        source = item.get("limits", {}).get("source")
+        estimated_rpm, estimated_rpd = _estimated_provider_limits(provider_name)
+        has_live_limits = source == "response_headers"
+        has_estimated_limits = estimated_rpm >= 0 or estimated_rpd >= 0
+        if not has_live_limits and not has_estimated_limits:
             continue
 
-        valid_models = [
-            model
-            for model in chat_models
-            if model.get("provider") == provider_name and _category_for_model(model) == "llm"
-        ]
-        if not valid_models:
-            continue
-
-        provider_candidates.append(
+        rpm_remaining = _remaining_rpm(item)
+        rpd_remaining = _remaining_rpd(item)
+        tpm_remaining = _remaining_tpm(item)
+        route_candidates.append(
             {
                 "provider": provider_name,
-                "rpm_remaining": _remaining_rpm(item) or -1,
-                "rpd_remaining": _remaining_rpd(item) or -1,
-                "tpm_remaining": _remaining_tpm(item) or -1,
-                "models_count": len(valid_models),
+                "model": model.get("id"),
+                "source_rank": 0 if has_live_limits else 1,
+                "rpm_remaining": rpm_remaining if rpm_remaining is not None else estimated_rpm,
+                "rpd_remaining": rpd_remaining if rpd_remaining is not None else estimated_rpd,
+                "tpm_remaining": tpm_remaining if tpm_remaining is not None else -1,
+                "models_count": models_count_by_provider.get(provider_name, 0),
+                "index": index,
             }
         )
 
-    if not provider_candidates:
+    if not route_candidates:
         return None
 
-    provider_candidates.sort(
+    route_candidates.sort(
         key=lambda item: (
-            item["rpm_remaining"],
-            item["tpm_remaining"],
-            item["rpd_remaining"],
-            item["models_count"],
-        ),
-        reverse=True,
+            item["source_rank"],
+            -item["rpm_remaining"],
+            -item["tpm_remaining"],
+            -item["rpd_remaining"],
+            -item["models_count"],
+            item["index"],
+        )
     )
-    return provider_candidates[0]["provider"]
+    return {
+        "provider": route_candidates[0]["provider"],
+        "model": route_candidates[0]["model"],
+    }
 
 
 async def _sample_provider_limits() -> None:
@@ -1575,7 +801,25 @@ async def get_estimated_limits() -> dict:
 
 @router.get("/admin/dispatcher/cache", tags=["Admin"])
 async def get_dispatcher_cache() -> dict:
-    return _load_admin_cache()
+    return await _refresh_admin_cache_async()
+
+
+@router.get("/admin/dispatcher/status", tags=["Admin"])
+async def get_dispatcher_status() -> dict:
+    try:
+        return await provider_router.get_dispatcher_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/admin/dispatcher/mode", tags=["Admin"])
+async def set_dispatcher_mode(mode: str = Query(...)) -> dict:
+    try:
+        proxy_mode = provider_router.set_proxy_mode(mode)
+        await _refresh_admin_cache_async()
+        return {"proxy_mode": proxy_mode}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/admin/models/available", tags=["Admin"])
@@ -1600,7 +844,7 @@ async def get_available_models_for_admin() -> dict:
             "total_after_filter": len(filtered_models),
         },
     }
-    _refresh_admin_cache(all_models=all_models, block_two_payload=payload)
+    await _refresh_admin_cache_async(all_models=all_models, block_two_payload=payload)
     return payload
 
 
@@ -1634,7 +878,7 @@ async def validate_all_models_for_admin() -> dict:
 
     result = await _validate_llm_models(candidate_models, merge_existing=True)
     block_two_payload = await get_available_models_for_admin()
-    _refresh_admin_cache(all_models=all_models, block_two_payload=block_two_payload)
+    await _refresh_admin_cache_async(all_models=all_models, block_two_payload=block_two_payload)
     return result
 
 
@@ -1680,9 +924,11 @@ async def test_provider(
         response = await provider_router.race_chat_completion(request)
     except ValueError as exc:
         _store_model_test_result(provider_name, selected_model, None, None, str(exc))
+        await _refresh_admin_cache_async()
         raise HTTPException(status_code=400, detail=str(exc))
     except UpstreamProvidersExhausted as exc:
         _store_model_test_result(provider_name, selected_model, None, None, str(exc))
+        await _refresh_admin_cache_async()
         raise HTTPException(status_code=502, detail=exc.errors)
 
     message = None
@@ -1704,7 +950,7 @@ async def test_provider(
         message[:300] if isinstance(message, str) else None,
         None,
     )
-    _refresh_admin_cache()
+    await _refresh_admin_cache_async()
 
     return {
         "provider": provider_name,
@@ -1725,7 +971,7 @@ async def refresh_limits_health() -> dict:
         )
         await _sample_provider_limits()
         await validate_all_models_for_admin()
-        _refresh_admin_cache()
+        await _refresh_admin_cache_async()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1749,37 +995,59 @@ async def get_models() -> dict:
 @router.post("/v1/chat/completions", tags=["Chat"])
 async def create_chat_completion(request: ChatCompletionRequest) -> dict:
     effective_request = request
+    requested_provider_auto = _is_auto_value(request.provider)
+    requested_model_auto = _is_auto_value(request.model)
 
-    if request.provider == "auto":
-        models_payload = await provider_router.get_models()
-        candidate_models = _filter_models_for_current_plan(models_payload.get("data", []))
-        candidate_models = _filter_models_with_live_limits(candidate_models)
-        candidate_models = _filter_models_by_validation(candidate_models)
-        auto_provider = _pick_auto_provider(candidate_models)
-        effective_request = request.model_copy(update={"provider": auto_provider})
+    if requested_provider_auto or requested_model_auto:
+        candidate_models = _runtime_chat_models()
+        selected_route = _pick_auto_route(
+            candidate_models,
+            requested_provider=request.provider,
+            requested_model=request.model,
+        )
+        if not selected_route:
+            raise HTTPException(status_code=404, detail="No available provider/model route for requested auto selection")
+
+        update_payload = {}
+        if requested_provider_auto:
+            update_payload["provider"] = selected_route["provider"]
+        if requested_model_auto:
+            update_payload["model"] = selected_route["model"]
+        effective_request = request.model_copy(update=update_payload)
 
     try:
         response = await provider_router.race_chat_completion(effective_request)
         response.setdefault("_proxy", {})
-        if request.provider == "auto":
-            response["_proxy"]["requested_provider"] = "auto"
+        response["provider"] = response["_proxy"].get("selected_provider") or effective_request.provider
+        response["model"] = response["_proxy"].get("selected_model") or effective_request.model
+        if requested_provider_auto or requested_model_auto:
+            response["_proxy"]["requested_provider"] = request.provider
+            response["_proxy"]["requested_model"] = request.model
             response["_proxy"]["auto_selected_provider"] = effective_request.provider
+            response["_proxy"]["auto_selected_model"] = effective_request.model
             response["_proxy"]["selected_policy"] = (
-                "recommendations" if effective_request.provider else "fastest_fallback"
+                "recommendations" if effective_request.provider and effective_request.model else "fastest_fallback"
             )
-        _refresh_admin_cache()
+        await _refresh_admin_cache_async()
         return response
     except ValueError as exc:
+        await _refresh_admin_cache_async()
         raise HTTPException(status_code=400, detail=str(exc))
     except UpstreamProvidersExhausted as exc:
+        await _refresh_admin_cache_async()
         raise HTTPException(status_code=502, detail=exc.errors)
 
 
 @router.post("/v1/embeddings", tags=["Embeddings"])
 async def create_embeddings(request: EmbeddingRequest) -> dict:
     try:
-        return await provider_router.race_embeddings(request)
+        response = await provider_router.race_embeddings(request)
+        await _refresh_admin_cache_async()
+        return response
     except ValueError as exc:
+        await _refresh_admin_cache_async()
         raise HTTPException(status_code=400, detail=str(exc))
     except UpstreamProvidersExhausted as exc:
+        await _refresh_admin_cache_async()
         raise HTTPException(status_code=502, detail=exc.errors)
+

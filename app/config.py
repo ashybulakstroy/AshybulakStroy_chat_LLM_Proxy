@@ -35,8 +35,15 @@ class Settings:
     SAMBANOVA_API_KEY: str = os.getenv("SAMBANOVA_API_KEY", "")
     SAMBANOVA_API_BASE: str = os.getenv("SAMBANOVA_API_BASE", "https://api.sambanova.ai/v1")
 
+    EDENAI_API_KEY: str = os.getenv("EDENAI_API_KEY", "")
+    EDENAI_API_BASE: str = os.getenv("EDENAI_API_BASE", "https://api.edenai.run/v3/llm")
+
+    FIREWORKS_API_KEY: str = os.getenv("FIREWORKS_API_KEY", "")
+    FIREWORKS_API_BASE: str = os.getenv("FIREWORKS_API_BASE", "https://api.fireworks.ai/inference/v1")
+
     ENABLE_PROVIDER_LOG: bool = os.getenv("ENABLE_PROVIDER_LOG", "false").lower() in ("1", "true", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+    PROXY_MODE: str = os.getenv("PROXY_MODE", "LOAD_BALANCE").upper()
 
     def get_provider_configs(self) -> Dict[str, ProviderConfig]:
         configs = {
@@ -46,6 +53,8 @@ class Settings:
             "cerebras": ProviderConfig("cerebras", self.CEREBRAS_API_KEY, self.CEREBRAS_API_BASE),
             "gemini": ProviderConfig("gemini", self.GEMINI_API_KEY, self.GEMINI_API_BASE),
             "sambanova": ProviderConfig("sambanova", self.SAMBANOVA_API_KEY, self.SAMBANOVA_API_BASE),
+            "edenai": ProviderConfig("edenai", self.EDENAI_API_KEY, self.EDENAI_API_BASE),
+            "fireworks": ProviderConfig("fireworks", self.FIREWORKS_API_KEY, self.FIREWORKS_API_BASE),
         }
         return {name: config for name, config in configs.items() if config.api_key}
 
