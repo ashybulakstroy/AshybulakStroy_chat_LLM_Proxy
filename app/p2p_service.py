@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from threading import Lock
 from typing import Any
+
+import httpx
 
 from app.config import settings
 
 
 VALID_NODE_MODES = {"peer", "auto", "master_cache", "master"}
 VALID_DISPATCH_MODES = {"FAST", "LOAD_BALANCE", "LOCAL_FIRST", "COST_EFFECTIVE"}
+P2P_NETWORK_FILE = Path(__file__).resolve().parent.parent / "p2p_network_snapshot.json"
 
 
 @dataclass
@@ -28,6 +33,7 @@ class P2PService:
         self._lock = Lock()
         self._sessions = P2PSessionCounters()
         self._known_peers: dict[str, dict[str, Any]] = {}
+        self._network_file = P2P_NETWORK_FILE
         self._started_at = datetime.now(timezone.utc).isoformat()
         self._runtime_p2p_enabled: bool = settings.P2P_ENABLED
         self._runtime_node_mode: str = settings.NODE_MODE
@@ -51,6 +57,25 @@ class P2PService:
         if value is None:
             return 0.0
         return max(0.0, min(1.0, float(value)))
+
+    def _local_base_url(self) -> str:
+        configured = str(settings.P2P_BASE_URL or "").strip().rstrip("/")
+        if configured:
+            return configured
+        return f"http://127.0.0.1:{settings.PORT}"
+
+    def _local_peer_id(self) -> str:
+        return str(settings.P2P_NODE_ID or settings.P2P_NODE_NAME or f"node-{settings.PORT}").strip()
+
+    def _local_provider_names(self) -> list[str]:
+        return list(settings.get_provider_configs().keys())
+
+    def _local_direct_provider_access(self, node_mode: str | None = None) -> bool:
+        effective_mode = str(node_mode or self._runtime_node_mode).strip().lower()
+        return bool(self._local_provider_names()) and effective_mode != "master_cache"
+
+    def _should_persist_network(self, runtime_p2p_enabled: bool, runtime_node_mode: str) -> bool:
+        return runtime_p2p_enabled and runtime_node_mode in {"master", "master_cache"}
 
     def _parse_csv_list(self, value: str | None) -> list[str]:
         raw = str(value or "").strip()
@@ -281,6 +306,7 @@ class P2PService:
             old_node_mode,
             self._runtime_node_mode,
         )
+        self.save_network_snapshot()
         return self.get_status()
 
     def register_or_update_peer(
@@ -353,6 +379,7 @@ class P2PService:
             peer["base_url"],
             peer_count,
         )
+        self.save_network_snapshot()
         return dict(peer)
 
     def set_session_counters(
@@ -380,6 +407,165 @@ class P2PService:
         )
         return self.get_status()
 
+    def save_network_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            runtime_p2p_enabled = self._runtime_p2p_enabled
+            runtime_node_mode = self._runtime_node_mode
+        if not self._should_persist_network(runtime_p2p_enabled, runtime_node_mode):
+            return {"status": "skipped", "reason": "not_master_mode"}
+
+        status = self.get_status()
+        payload = {
+            "saved_at": self._now().isoformat(),
+            "node": status.get("node", {}),
+            "master": status.get("master", {}),
+            "network_map": status.get("network_map", {}),
+            "peers": status.get("peers", []),
+        }
+        self._network_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._logger.info(
+            "p2p_network_snapshot_saved path=%s peers=%s direct_provider_links=%s",
+            self._network_file,
+            len(payload["peers"]),
+            (payload.get("network_map", {}).get("routes", {}) or {}).get("direct_provider_links", 0),
+        )
+        return {
+            "status": "ok",
+            "path": str(self._network_file),
+            "peers": len(payload["peers"]),
+        }
+
+    def load_network_snapshot(self) -> dict[str, Any]:
+        if not self._network_file.exists():
+            return {"status": "missing", "loaded_peers": 0, "path": str(self._network_file)}
+
+        try:
+            payload = json.loads(self._network_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self._logger.warning("p2p_network_snapshot_load_failed path=%s error=%s", self._network_file, str(exc))
+            return {"status": "error", "loaded_peers": 0, "path": str(self._network_file), "error": str(exc)}
+
+        peers = payload.get("peers") or []
+        loaded_count = 0
+        with self._lock:
+            self._known_peers = {}
+            for peer in peers:
+                if not isinstance(peer, dict):
+                    continue
+                peer_id = str(peer.get("peer_id") or "").strip()
+                if not peer_id:
+                    continue
+                self._known_peers[peer_id] = dict(peer)
+                loaded_count += 1
+
+        self._logger.info(
+            "p2p_network_snapshot_loaded path=%s loaded_peers=%s saved_at=%s",
+            self._network_file,
+            loaded_count,
+            payload.get("saved_at"),
+        )
+        return {
+            "status": "ok",
+            "loaded_peers": loaded_count,
+            "path": str(self._network_file),
+            "saved_at": payload.get("saved_at"),
+        }
+
+    async def send_local_heartbeat(self, *, master_url: str | None = None, reason: str = "manual") -> dict[str, Any]:
+        target_master = str(master_url or settings.P2P_MASTER_URL or "").strip().rstrip("/")
+        if not target_master:
+            return {"status": "skipped", "reason": "missing_master_url"}
+        if not self._runtime_p2p_enabled:
+            return {"status": "skipped", "reason": "p2p_disabled"}
+
+        providers = self._local_provider_names()
+        direct_provider_access = self._local_direct_provider_access()
+        payload = {
+            "peer_id": self._local_peer_id(),
+            "node_name": settings.P2P_NODE_NAME,
+            "node_mode": self._runtime_node_mode,
+            "scope": settings.P2P_SCOPE,
+            "base_url": self._local_base_url(),
+            "status": "online",
+            "accept_remote_tasks": settings.P2P_ACCEPT_REMOTE_TASKS,
+            "share_capacity": settings.P2P_SHARE_CAPACITY,
+            "direct_provider_access": direct_provider_access,
+            "supports_chat": True,
+            "supports_embeddings": True,
+            "providers": ",".join(providers),
+            "models": "",
+            "shared_rpm_ratio": self._safe_ratio(settings.P2P_SHARED_RPM_RATIO),
+            "shared_tpm_ratio": self._safe_ratio(settings.P2P_SHARED_TPM_RATIO),
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(f"{target_master}/admin/p2p/peers/heartbeat", params=payload)
+            response.raise_for_status()
+            body = response.json()
+
+        self._logger.info(
+            "p2p_local_heartbeat_sent reason=%s peer_id=%s master_url=%s direct_provider_access=%s providers=%s",
+            reason,
+            payload["peer_id"],
+            target_master,
+            direct_provider_access,
+            len(providers),
+        )
+        return {
+            "status": "ok",
+            "master_url": target_master,
+            "peer_id": payload["peer_id"],
+            "response": body,
+        }
+
+    async def request_peers_reregister(self) -> dict[str, Any]:
+        with self._lock:
+            runtime_p2p_enabled = self._runtime_p2p_enabled
+            runtime_node_mode = self._runtime_node_mode
+            peers = [dict(item) for item in self._known_peers.values()]
+
+        if not self._should_persist_network(runtime_p2p_enabled, runtime_node_mode):
+            return {"status": "skipped", "reason": "not_master_mode", "requested": 0}
+
+        master_url = self._local_base_url()
+        requested = 0
+        failures: list[dict[str, Any]] = []
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for peer in peers:
+                base_url = str(peer.get("base_url") or "").strip().rstrip("/")
+                peer_id = str(peer.get("peer_id") or "").strip() or "peer"
+                if not base_url:
+                    failures.append({"peer_id": peer_id, "error": "missing_base_url"})
+                    continue
+                try:
+                    response = await client.post(
+                        f"{base_url}/internal/p2p/re-register",
+                        params={"master_url": master_url, "reason": "master_startup_recovery"},
+                    )
+                    response.raise_for_status()
+                    requested += 1
+                    self._logger.info(
+                        "p2p_peer_reregister_requested peer_id=%s peer_url=%s master_url=%s",
+                        peer_id,
+                        base_url,
+                        master_url,
+                    )
+                except Exception as exc:
+                    failures.append({"peer_id": peer_id, "error": str(exc)})
+                    self._logger.warning(
+                        "p2p_peer_reregister_request_failed peer_id=%s peer_url=%s error=%s",
+                        peer_id,
+                        base_url,
+                        str(exc),
+                    )
+
+        return {
+            "status": "ok",
+            "requested": requested,
+            "failed": len(failures),
+            "failures": failures,
+        }
+
     def get_status(self) -> dict[str, Any]:
         with self._lock:
             sessions = asdict(self._sessions)
@@ -400,7 +586,7 @@ class P2PService:
         is_master_mode = runtime_node_mode == "master"
         is_master_cache_mode = runtime_node_mode == "master_cache"
         provider_configs = settings.get_provider_configs()
-        local_direct_provider_access = bool(provider_configs) and runtime_node_mode != "master_cache"
+        local_direct_provider_access = self._local_direct_provider_access(runtime_node_mode)
         local_provider_count = 0
         direct_provider_links: set[str] = set()
         local_role = "master" if is_master_mode else "master_cache" if is_master_cache_mode else runtime_node_mode
@@ -465,6 +651,7 @@ class P2PService:
                 "name": settings.P2P_NODE_NAME,
                 "node_id": settings.P2P_NODE_ID or None,
                 "cluster_name": settings.P2P_CLUSTER_NAME,
+                "base_url": self._local_base_url(),
                 "master_url": settings.P2P_MASTER_URL or None,
                 "allow_master": settings.P2P_ALLOW_MASTER,
                 "accept_remote_tasks": settings.P2P_ACCEPT_REMOTE_TASKS,
@@ -481,6 +668,7 @@ class P2PService:
                 "master_url": settings.P2P_MASTER_URL or None,
                 "cluster_name": settings.P2P_CLUSTER_NAME,
                 "known_peers_count": len(peers),
+                "network_snapshot_file": str(self._network_file),
             },
             "limits": {
                 "max_remote_sessions": settings.P2P_MAX_REMOTE_SESSIONS,

@@ -4,6 +4,7 @@ import logging
 from fastapi import FastAPI
 
 from app.config import settings
+from app.p2p_service import p2p_service
 from app.rate_limits import rate_limit_store
 from app.router_service import ProviderRouter
 from app.routes import _refresh_admin_cache, router
@@ -45,6 +46,18 @@ async def _run_startup_probe_background() -> None:
         logger.exception("startup_probe_failed error=%s", str(exc))
 
 
+async def _run_p2p_recovery_background() -> None:
+    try:
+        result = await p2p_service.request_peers_reregister()
+        logger.info(
+            "p2p_recovery_completed requested=%s failed=%s",
+            result.get("requested", 0),
+            result.get("failed", 0),
+        )
+    except Exception as exc:
+        logger.exception("p2p_recovery_failed error=%s", str(exc))
+
+
 @app.on_event("startup")
 async def startup_probe_limits() -> None:
     logger.info(
@@ -55,7 +68,15 @@ async def startup_probe_limits() -> None:
     provider_names = list(settings.get_provider_configs().keys())
     rate_limit_store.load_snapshot(provider_names)
     _refresh_admin_cache()
+    snapshot_result = p2p_service.load_network_snapshot()
+    logger.info(
+        "p2p_network_snapshot_bootstrap status=%s loaded_peers=%s path=%s",
+        snapshot_result.get("status"),
+        snapshot_result.get("loaded_peers", 0),
+        snapshot_result.get("path"),
+    )
     asyncio.create_task(_run_startup_probe_background())
+    asyncio.create_task(_run_p2p_recovery_background())
 
 
 @app.get("/health", tags=["Health"])

@@ -162,6 +162,19 @@ Direct route capacity rules:
 - `Network Map` capacity is now based only on direct provider links
 - `dispatch preview` skips link-only peers because they do not add real route capacity in the current MVP
 
+Current master recovery flow:
+
+- master saves current peer/network state to `p2p_network_snapshot.json`
+- on startup master loads that snapshot back into memory
+- after startup master asks saved peers to re-register through `/internal/p2p/re-register`
+- peer then sends a fresh heartbeat back to the master
+
+Recommended config for peers:
+
+- set `P2P_BASE_URL` to the real reachable URL of that node
+- set `P2P_MASTER_URL` to the master URL
+- this helps master re-register peers correctly after restart
+
 Main endpoints:
 
 - `/admin/p2p`

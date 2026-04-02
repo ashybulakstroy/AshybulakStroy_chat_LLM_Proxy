@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
@@ -971,6 +972,19 @@ async def p2p_dispatch_preview(
             requested_mode=requested_mode,
             task_type=task_type,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/internal/p2p/re-register", tags=["Internal"])
+async def p2p_reregister_to_master(
+    master_url: str | None = Query(default=None),
+    reason: str = Query(default="manual_reregister"),
+) -> dict:
+    try:
+        return await p2p_service.send_local_heartbeat(master_url=master_url, reason=reason)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

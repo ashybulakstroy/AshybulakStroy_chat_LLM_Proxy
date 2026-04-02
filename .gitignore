@@ -17,3 +17,4 @@ admin_dashboard_cache.json
 model_validation_snapshot.json
 provider_limits.json
 rate_limits_snapshot.json
+p2p_network_snapshot.json

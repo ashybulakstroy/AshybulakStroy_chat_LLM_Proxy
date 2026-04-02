@@ -51,6 +51,7 @@ class Settings:
     P2P_NODE_NAME: str = os.getenv("P2P_NODE_NAME", "home-node").strip() or "home-node"
     P2P_NODE_ID: str = os.getenv("P2P_NODE_ID", "").strip()
     P2P_CLUSTER_NAME: str = os.getenv("P2P_CLUSTER_NAME", "default").strip() or "default"
+    P2P_BASE_URL: str = os.getenv("P2P_BASE_URL", "").strip()
     P2P_MASTER_URL: str = os.getenv("P2P_MASTER_URL", "").strip()
     P2P_ALLOW_MASTER: bool = os.getenv("P2P_ALLOW_MASTER", "true").lower() in ("1", "true", "yes")
     P2P_ACCEPT_REMOTE_TASKS: bool = os.getenv("P2P_ACCEPT_REMOTE_TASKS", "true").lower() in ("1", "true", "yes")
