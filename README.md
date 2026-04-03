@@ -175,6 +175,12 @@ Recommended config for peers:
 - set `P2P_MASTER_URL` to the master URL
 - this helps master re-register peers correctly after restart
 
+Slot-based sharing limits:
+
+- `P2P_MAX_CLIENT_SLOTS_PER_MIN=1` limits how many LLM slot units one client may consume per minute on a node
+- `P2P_MAX_SHARED_SLOTS_PER_MIN=5` limits how many slot units the node is willing to share with the whole P2P network per minute
+- routing capacity in the P2P admin uses these slot limits for the current MVP
+
 Main endpoints:
 
 - `/admin/p2p`

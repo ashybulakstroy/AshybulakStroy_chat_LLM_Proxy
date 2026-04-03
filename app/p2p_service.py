@@ -33,6 +33,7 @@ class P2PService:
         self._lock = Lock()
         self._sessions = P2PSessionCounters()
         self._known_peers: dict[str, dict[str, Any]] = {}
+        self._known_masters: dict[str, dict[str, Any]] = {}
         self._network_file = P2P_NETWORK_FILE
         self._started_at = datetime.now(timezone.utc).isoformat()
         self._runtime_p2p_enabled: bool = settings.P2P_ENABLED
@@ -75,7 +76,7 @@ class P2PService:
         return bool(self._local_provider_names()) and effective_mode != "master_cache"
 
     def _should_persist_network(self, runtime_p2p_enabled: bool, runtime_node_mode: str) -> bool:
-        return runtime_p2p_enabled and runtime_node_mode in {"master", "master_cache"}
+        return runtime_p2p_enabled
 
     def _parse_csv_list(self, value: str | None) -> list[str]:
         raw = str(value or "").strip()
@@ -91,6 +92,11 @@ class P2PService:
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     def _peer_status(self, peer: dict[str, Any]) -> str:
+        route_status = str(peer.get("route_status") or "").strip().lower()
+        if route_status == "cache":
+            return "cache"
+        if route_status in {"error", "offline"}:
+            return route_status
         last_heartbeat_at = peer.get("last_heartbeat_at")
         if not last_heartbeat_at:
             return "unknown"
@@ -123,6 +129,7 @@ class P2PService:
         runtime_status = self._peer_status(peer)
         normalized = dict(peer)
         normalized["runtime_status"] = runtime_status
+        normalized["route_status"] = str(peer.get("route_status") or runtime_status or "unknown").strip().lower()
         normalized["accept_remote_tasks"] = self._to_bool(peer.get("accept_remote_tasks"), True)
         normalized["share_capacity"] = self._to_bool(peer.get("share_capacity"), True)
         normalized["direct_provider_access"] = self._to_bool(peer.get("direct_provider_access"), True)
@@ -199,6 +206,93 @@ class P2PService:
                     )
 
         self._stale_logged_peers = current_stale_peers
+
+    def _build_route_pairs(self, providers: list[str], models: list[str]) -> list[dict[str, str]]:
+        clean_providers = [item for item in providers if item]
+        clean_models = [item for item in models if item]
+        if not clean_providers:
+            return []
+        if not clean_models:
+            return [{"provider": provider, "model": "auto"} for provider in clean_providers]
+        if len(clean_providers) == 1:
+            return [{"provider": clean_providers[0], "model": model} for model in clean_models]
+        if len(clean_models) == 1:
+            return [{"provider": provider, "model": clean_models[0]} for provider in clean_providers]
+        if len(clean_providers) == len(clean_models):
+            return [
+                {"provider": provider, "model": model}
+                for provider, model in zip(clean_providers, clean_models)
+            ]
+        return [{"provider": provider, "model": "auto"} for provider in clean_providers]
+
+    def _route_slots_per_minute(self, route_owner: dict[str, Any], route_count: int) -> int:
+        route_total = max(1, route_count)
+        shared_ratio = self._safe_ratio(route_owner.get("shared_rpm_ratio", 1.0))
+        shared_slots_budget = max(1, int(settings.P2P_MAX_SHARED_SLOTS_PER_MIN * shared_ratio))
+        client_slots_budget = max(1, int(settings.P2P_MAX_CLIENT_SLOTS_PER_MIN))
+        reserved_sessions = max(0, int(route_owner.get("active_sessions", 0)))
+        shared_slots_per_route = max(0, shared_slots_budget // route_total)
+        return max(0, min(shared_slots_per_route, client_slots_budget) - reserved_sessions)
+
+    def _build_routing_table(
+        self,
+        *,
+        masters: list[dict[str, Any]],
+        peers: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        routing_rows: list[dict[str, Any]] = []
+        owner_rows = [
+            *[
+                {
+                    "kind": "master",
+                    "owner_id": master.get("route_id") or master.get("base_url") or "master",
+                    "owner_name": master.get("node_name") or "master",
+                    **master,
+                }
+                for master in masters
+            ],
+            *[
+                {
+                    "kind": "peer",
+                    "owner_id": peer.get("peer_id") or peer.get("node_name") or "peer",
+                    "owner_name": peer.get("node_name") or peer.get("peer_id") or "peer",
+                    **peer,
+                }
+                for peer in peers
+            ],
+        ]
+        for owner in owner_rows:
+            if owner.get("route_status") != "online" or not owner.get("direct_provider_access"):
+                continue
+            route_pairs = self._build_route_pairs(
+                list(owner.get("providers") or []),
+                list(owner.get("models") or []),
+            )
+            route_count = len(route_pairs) or max(1, len(owner.get("providers") or []))
+            available_slots = self._route_slots_per_minute(owner, route_count)
+            for pair in route_pairs:
+                routing_rows.append(
+                    {
+                        "kind": owner["kind"],
+                        "owner_id": owner["owner_id"],
+                        "owner_name": owner["owner_name"],
+                        "provider": pair["provider"],
+                        "model": pair["model"],
+                        "resource_name": f"{pair['provider']} + {pair['model']}",
+                        "available_slots_per_minute": available_slots,
+                        "route_status": owner.get("route_status"),
+                        "runtime_status": owner.get("runtime_status"),
+                        "direct_provider_access": owner.get("direct_provider_access"),
+                    }
+                )
+        routing_rows.sort(
+            key=lambda item: (
+                item.get("owner_name") or "",
+                item.get("provider") or "",
+                item.get("model") or "",
+            )
+        )
+        return routing_rows
 
     def dispatch_preview(
         self,
@@ -309,6 +403,82 @@ class P2PService:
         self.save_network_snapshot()
         return self.get_status()
 
+    def _route_id_from_url(self, base_url: str, role: str) -> str:
+        cleaned = str(base_url or "").strip().rstrip("/")
+        if not cleaned:
+            return f"{role}-unknown"
+        return f"{role}::{cleaned}"
+
+    def _ensure_local_master_record(self) -> None:
+        if self._runtime_node_mode not in {"master", "master_cache"}:
+            return
+        route_id = self._route_id_from_url(self._local_base_url(), "master")
+        with self._lock:
+            existing = self._known_masters.get(route_id, {})
+            self._known_masters[route_id] = {
+                "route_id": route_id,
+                "node_name": settings.P2P_NODE_NAME,
+                "node_mode": self._runtime_node_mode,
+                "scope": settings.P2P_SCOPE,
+                "base_url": self._local_base_url(),
+                "status": "online",
+                "route_status": "online",
+                "providers": self._local_provider_names(),
+                "models": list(existing.get("models") or []),
+                "direct_provider_access": self._local_direct_provider_access(),
+                "accept_remote_tasks": settings.P2P_ACCEPT_REMOTE_TASKS,
+                "share_capacity": settings.P2P_SHARE_CAPACITY,
+                "supports_chat": True,
+                "supports_embeddings": True,
+                "health_score": 1.0,
+                "active_sessions": 0,
+                "last_error": None,
+                "created_at": existing.get("created_at") or self._now().isoformat(),
+                "last_heartbeat_at": self._now().isoformat(),
+            }
+
+    def ensure_master_route_from_config(self) -> None:
+        master_url = str(settings.P2P_MASTER_URL or "").strip().rstrip("/")
+        if not master_url:
+            return
+        route_id = self._route_id_from_url(master_url, "master")
+        with self._lock:
+            existing = self._known_masters.get(route_id, {})
+            self._known_masters[route_id] = {
+                "route_id": route_id,
+                "node_name": existing.get("node_name") or "master",
+                "node_mode": "master",
+                "scope": settings.P2P_SCOPE,
+                "base_url": master_url,
+                "status": existing.get("status") or "unknown",
+                "route_status": existing.get("route_status") or "cache",
+                "providers": list(existing.get("providers") or []),
+                "models": list(existing.get("models") or []),
+                "direct_provider_access": self._to_bool(existing.get("direct_provider_access"), True),
+                "accept_remote_tasks": True,
+                "share_capacity": True,
+                "supports_chat": True,
+                "supports_embeddings": True,
+                "health_score": self._safe_health(existing.get("health_score", 0.0)),
+                "active_sessions": max(0, int(existing.get("active_sessions", 0))),
+                "last_error": existing.get("last_error"),
+                "created_at": existing.get("created_at") or self._now().isoformat(),
+                "last_heartbeat_at": existing.get("last_heartbeat_at"),
+            }
+
+    def _network_changed(self, before: dict[str, Any], after: dict[str, Any]) -> bool:
+        watched_keys = (
+            "base_url",
+            "status",
+            "route_status",
+            "node_mode",
+            "direct_provider_access",
+            "providers",
+            "health_score",
+            "last_error",
+        )
+        return any(before.get(key) != after.get(key) for key in watched_keys)
+
     def register_or_update_peer(
         self,
         *,
@@ -345,6 +515,7 @@ class P2PService:
                 "scope": str(scope).strip().lower() or "private",
                 "base_url": str(base_url).strip() or None,
                 "status": str(status).strip().lower() or "online",
+                "route_status": "online",
                 "note": str(note).strip() or None,
                 "accept_remote_tasks": bool(accept_remote_tasks),
                 "share_capacity": bool(share_capacity),
@@ -363,6 +534,7 @@ class P2PService:
             }
             self._known_peers[cleaned_peer_id] = peer
             peer_count = len(self._known_peers)
+            network_changed = self._network_changed(existing, peer)
         self._logger.info(
             "p2p_peer_upserted peer_id=%s node_name=%s node_mode=%s scope=%s status=%s direct_provider_access=%s health_score=%s supports_chat=%s supports_embeddings=%s providers=%s models=%s base_url=%s total_known_peers=%s",
             cleaned_peer_id,
@@ -379,7 +551,8 @@ class P2PService:
             peer["base_url"],
             peer_count,
         )
-        self.save_network_snapshot()
+        if network_changed:
+            self.save_network_snapshot()
         return dict(peer)
 
     def set_session_counters(
@@ -414,12 +587,15 @@ class P2PService:
         if not self._should_persist_network(runtime_p2p_enabled, runtime_node_mode):
             return {"status": "skipped", "reason": "not_master_mode"}
 
+        self._ensure_local_master_record()
+        self.ensure_master_route_from_config()
         status = self.get_status()
         payload = {
             "saved_at": self._now().isoformat(),
             "node": status.get("node", {}),
             "master": status.get("master", {}),
             "network_map": status.get("network_map", {}),
+            "masters": status.get("masters", []),
             "peers": status.get("peers", []),
         }
         self._network_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -446,17 +622,35 @@ class P2PService:
             return {"status": "error", "loaded_peers": 0, "path": str(self._network_file), "error": str(exc)}
 
         peers = payload.get("peers") or []
+        masters = payload.get("masters") or []
         loaded_count = 0
         with self._lock:
             self._known_peers = {}
+            self._known_masters = {}
             for peer in peers:
                 if not isinstance(peer, dict):
                     continue
                 peer_id = str(peer.get("peer_id") or "").strip()
                 if not peer_id:
                     continue
-                self._known_peers[peer_id] = dict(peer)
+                cached_peer = dict(peer)
+                cached_peer["route_status"] = "cache"
+                cached_peer["status"] = "cache"
+                self._known_peers[peer_id] = cached_peer
                 loaded_count += 1
+            for master in masters:
+                if not isinstance(master, dict):
+                    continue
+                route_id = str(master.get("route_id") or "").strip()
+                if not route_id:
+                    continue
+                cached_master = dict(master)
+                cached_master["route_status"] = "cache"
+                cached_master["status"] = "cache"
+                self._known_masters[route_id] = cached_master
+
+        self._ensure_local_master_record()
+        self.ensure_master_route_from_config()
 
         self._logger.info(
             "p2p_network_snapshot_loaded path=%s loaded_peers=%s saved_at=%s",
@@ -470,6 +664,88 @@ class P2PService:
             "path": str(self._network_file),
             "saved_at": payload.get("saved_at"),
         }
+
+    def import_network_map(self, payload: dict[str, Any]) -> dict[str, Any]:
+        peers = payload.get("peers") or []
+        masters = payload.get("masters") or []
+        imported_peers = 0
+        imported_masters = 0
+        changed = False
+        with self._lock:
+            for peer in peers:
+                if not isinstance(peer, dict):
+                    continue
+                peer_id = str(peer.get("peer_id") or "").strip()
+                if not peer_id:
+                    continue
+                existing = self._known_peers.get(peer_id, {})
+                candidate = dict(peer)
+                candidate["route_status"] = "cache"
+                candidate["status"] = "cache"
+                if self._network_changed(existing, candidate):
+                    changed = True
+                self._known_peers[peer_id] = candidate
+                imported_peers += 1
+            for master in masters:
+                if not isinstance(master, dict):
+                    continue
+                route_id = str(master.get("route_id") or "").strip()
+                if not route_id:
+                    continue
+                existing = self._known_masters.get(route_id, {})
+                candidate = dict(master)
+                candidate["route_status"] = "cache"
+                candidate["status"] = "cache"
+                if self._network_changed(existing, candidate):
+                    changed = True
+                self._known_masters[route_id] = candidate
+                imported_masters += 1
+
+        self._ensure_local_master_record()
+        self.ensure_master_route_from_config()
+        if changed:
+            self.save_network_snapshot()
+        return {
+            "status": "ok",
+            "imported_peers": imported_peers,
+            "imported_masters": imported_masters,
+            "changed": changed,
+        }
+
+    def export_network_map(self) -> dict[str, Any]:
+        self._ensure_local_master_record()
+        self.ensure_master_route_from_config()
+        with self._lock:
+            masters = [self._normalize_peer(dict(item)) for item in self._known_masters.values()]
+            peers = [self._normalize_peer(dict(item)) for item in self._known_peers.values()]
+        masters.sort(key=lambda item: (item.get("base_url") or "", item.get("route_id") or ""))
+        peers.sort(key=lambda item: (item.get("node_name") or "", item.get("peer_id") or ""))
+        return {
+            "status": "ok",
+            "exported_at": self._now().isoformat(),
+            "masters": masters,
+            "peers": peers,
+        }
+
+    async def pull_network_map(self, *, master_url: str | None = None) -> dict[str, Any]:
+        target_master = str(master_url or settings.P2P_MASTER_URL or "").strip().rstrip("/")
+        if not target_master:
+            return {"status": "skipped", "reason": "missing_master_url"}
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{target_master}/internal/p2p/network-map")
+            response.raise_for_status()
+            payload = response.json()
+
+        imported = self.import_network_map(payload)
+        self._logger.info(
+            "p2p_network_map_pulled master_url=%s imported_peers=%s imported_masters=%s changed=%s",
+            target_master,
+            imported.get("imported_peers", 0),
+            imported.get("imported_masters", 0),
+            imported.get("changed", False),
+        )
+        return imported
 
     async def send_local_heartbeat(self, *, master_url: str | None = None, reason: str = "manual") -> dict[str, Any]:
         target_master = str(master_url or settings.P2P_MASTER_URL or "").strip().rstrip("/")
@@ -516,6 +792,70 @@ class P2PService:
             "master_url": target_master,
             "peer_id": payload["peer_id"],
             "response": body,
+        }
+
+    async def validate_cached_routes(self) -> dict[str, Any]:
+        self._ensure_local_master_record()
+        self.ensure_master_route_from_config()
+        changes = 0
+        validated = 0
+        failed = 0
+
+        async def _validate_entry(kind: str, route_key: str, route: dict[str, Any]) -> None:
+            nonlocal changes, validated, failed
+            base_url = str(route.get("base_url") or "").strip().rstrip("/")
+            before = dict(route)
+            if not base_url:
+                route["route_status"] = "error"
+                route["status"] = "error"
+                route["last_error"] = "missing_base_url"
+                failed += 1
+                if self._network_changed(before, route):
+                    changes += 1
+                return
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{base_url}/admin/p2p/status")
+                    response.raise_for_status()
+                    payload = response.json()
+                route["route_status"] = "online"
+                route["status"] = "online"
+                route["last_error"] = None
+                route["last_heartbeat_at"] = self._now().isoformat()
+                route["node_name"] = payload.get("node", {}).get("name") or route.get("node_name")
+                route["node_mode"] = payload.get("node", {}).get("mode") or route.get("node_mode")
+                validated += 1
+            except Exception as exc:
+                route["route_status"] = "error"
+                route["status"] = "error"
+                route["last_error"] = str(exc)
+                failed += 1
+                self._logger.warning("p2p_route_validation_failed kind=%s route_key=%s error=%s", kind, route_key, str(exc))
+            if self._network_changed(before, route):
+                changes += 1
+
+        with self._lock:
+            masters = [(route_id, self._known_masters[route_id]) for route_id in list(self._known_masters.keys())]
+            peers = [(peer_id, self._known_peers[peer_id]) for peer_id in list(self._known_peers.keys())]
+
+        for route_id, route in masters:
+            await _validate_entry("master", route_id, route)
+        for peer_id, route in peers:
+            await _validate_entry("peer", peer_id, route)
+
+        if changes:
+            self.save_network_snapshot()
+        self._logger.info(
+            "p2p_routes_validated validated=%s failed=%s changed=%s",
+            validated,
+            failed,
+            changes,
+        )
+        return {
+            "status": "ok",
+            "validated": validated,
+            "failed": failed,
+            "changed": changes,
         }
 
     async def request_peers_reregister(self) -> dict[str, Any]:
@@ -567,17 +907,23 @@ class P2PService:
         }
 
     def get_status(self) -> dict[str, Any]:
+        self._ensure_local_master_record()
+        self.ensure_master_route_from_config()
         with self._lock:
             sessions = asdict(self._sessions)
             peers = [self._normalize_peer(dict(item)) for item in self._known_peers.values()]
+            masters = [self._normalize_peer(dict(item)) for item in self._known_masters.values()]
             runtime_p2p_enabled = self._runtime_p2p_enabled
             runtime_node_mode = self._runtime_node_mode
 
         peers.sort(key=lambda item: (item.get("node_name") or "", item.get("peer_id") or ""))
+        masters.sort(key=lambda item: (item.get("base_url") or "", item.get("route_id") or ""))
         peer_status_summary = {
             "total_known_peers": len(peers),
             "online": sum(1 for peer in peers if self._peer_status(peer) == "online"),
             "stale": sum(1 for peer in peers if self._peer_status(peer) == "stale"),
+            "cache": sum(1 for peer in peers if self._peer_status(peer) == "cache"),
+            "error": sum(1 for peer in peers if self._peer_status(peer) == "error"),
             "avg_health_score": round(sum(peer.get("health_score", 0.0) for peer in peers) / len(peers), 3) if peers else 0.0,
         }
 
@@ -587,15 +933,10 @@ class P2PService:
         is_master_cache_mode = runtime_node_mode == "master_cache"
         provider_configs = settings.get_provider_configs()
         local_direct_provider_access = self._local_direct_provider_access(runtime_node_mode)
-        local_provider_count = 0
         direct_provider_links: set[str] = set()
         local_role = "master" if is_master_mode else "master_cache" if is_master_cache_mode else runtime_node_mode
-        if runtime_p2p_enabled and is_master_mode and local_direct_provider_access:
-            local_provider_count = len(provider_configs)
-            for provider_name in provider_configs.keys():
-                direct_provider_links.add(f"{settings.P2P_NODE_NAME or 'master-node'}::{provider_name}")
 
-        master_count = 1 if runtime_p2p_enabled and is_master_mode else 0
+        master_count = sum(1 for master in masters if master.get("route_status") == "online")
         peer_count = sum(1 for peer in peers if peer.get("node_mode") == "peer")
         direct_peer_count = sum(
             1
@@ -622,11 +963,21 @@ class P2PService:
             peer_id = peer.get("peer_id") or peer.get("node_name") or "peer"
             for provider_name in peer.get("providers") or []:
                 direct_provider_links.add(f"{peer_id}::{provider_name}")
+        for master in masters:
+            if master.get("route_status") != "online" or not master.get("direct_provider_access"):
+                continue
+            route_id = master.get("route_id") or master.get("node_name") or "master"
+            for provider_name in master.get("providers") or []:
+                direct_provider_links.add(f"{route_id}::{provider_name}")
 
         network_map = {
             "master_nodes": {
                 "count": master_count,
-                "direct_provider_count": local_provider_count,
+                "direct_provider_count": sum(
+                    len(master.get("providers") or [])
+                    for master in masters
+                    if master.get("route_status") == "online" and master.get("direct_provider_access")
+                ),
                 "direct_provider_access": local_direct_provider_access,
                 "role": local_role,
             },
@@ -640,6 +991,7 @@ class P2PService:
                 "direct_provider_links": len(direct_provider_links),
             },
         }
+        routing_table = self._build_routing_table(masters=masters, peers=peers)
 
         return {
             "status": "ok",
@@ -671,6 +1023,8 @@ class P2PService:
                 "network_snapshot_file": str(self._network_file),
             },
             "limits": {
+                "max_client_slots_per_min": settings.P2P_MAX_CLIENT_SLOTS_PER_MIN,
+                "max_shared_slots_per_min": settings.P2P_MAX_SHARED_SLOTS_PER_MIN,
                 "max_remote_sessions": settings.P2P_MAX_REMOTE_SESSIONS,
                 "max_outgoing_sessions": settings.P2P_MAX_OUTGOING_SESSIONS,
                 "max_queue_size": settings.P2P_MAX_QUEUE_SIZE,
@@ -684,8 +1038,14 @@ class P2PService:
             },
             "sessions": sessions,
             "peers": peers,
+            "masters": masters,
             "heartbeat": peer_status_summary,
             "network_map": network_map,
+            "routing": {
+                "rows": routing_table,
+                "total_rows": len(routing_table),
+                "online_rows": sum(1 for row in routing_table if row.get("route_status") == "online"),
+            },
             "notes": {
                 "mvp_stage": True,
                 "execution": "Peer transport is still not implemented. This runtime state is for debug/admin visibility and manual MVP testing.",

@@ -190,11 +190,13 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       <table>
         <thead>
           <tr>
+            <th>Kind</th>
             <th>Peer ID</th>
             <th>Name</th>
             <th>Mode</th>
             <th>Scope</th>
             <th>Status</th>
+            <th>Route Status</th>
             <th>Route Type</th>
             <th>Health</th>
             <th>Capabilities</th>
@@ -205,7 +207,27 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
           </tr>
         </thead>
         <tbody id="peer-table">
-          <tr><td colspan="12">No peers discovered yet.</td></tr>
+          <tr><td colspan="14">No peers discovered yet.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-bottom: 18px;">
+      <h2>Маршрутизация</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Node</th>
+            <th>Provider</th>
+            <th>Model</th>
+            <th>Resource</th>
+            <th>Slots / Min</th>
+            <th>Route Status</th>
+          </tr>
+        </thead>
+        <tbody id="routing-table">
+          <tr><td colspan="7">No routing resources yet.</td></tr>
         </tbody>
       </table>
     </section>
@@ -350,19 +372,27 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       });
     }
 
-    function renderPeers(peers) {
+    function renderPeers(peers, masters) {
       const tbody = document.getElementById("peer-table");
-      if (!Array.isArray(peers) || peers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="12">No peers discovered yet.</td></tr>';
+      const peerRows = Array.isArray(peers) ? peers : [];
+      const masterRows = Array.isArray(masters) ? masters : [];
+      const rows = [
+        ...masterRows.map((item) => ({ kind: "master", row_id: item.route_id || item.base_url || "", ...item })),
+        ...peerRows.map((item) => ({ kind: "peer", row_id: item.peer_id || "", ...item })),
+      ];
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="14">No peers discovered yet.</td></tr>';
         return;
       }
-      tbody.innerHTML = peers.map((peer) => `
+      tbody.innerHTML = rows.map((peer) => `
         <tr>
-          <td>${peer.peer_id || ""}</td>
+          <td>${peer.kind || ""}</td>
+          <td>${peer.peer_id || peer.route_id || ""}</td>
           <td>${peer.node_name || ""}</td>
           <td>${peer.node_mode || ""}</td>
           <td>${peer.scope || ""}</td>
           <td>${peer.runtime_status || peer.status || ""}</td>
+          <td>${peer.route_status || ""}</td>
           <td>${peer.direct_provider_access ? "direct" : "link-only"}</td>
           <td>${peer.health_score ?? ""}</td>
           <td>chat=${Boolean(peer.supports_chat)} / emb=${Boolean(peer.supports_embeddings)} / remote=${Boolean(peer.accept_remote_tasks)} / direct=${Boolean(peer.direct_provider_access)}</td>
@@ -370,6 +400,26 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
           <td>${peer.active_sessions ?? 0}</td>
           <td>${peer.last_heartbeat_at || ""}</td>
           <td>${peer.base_url || ""}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderRouting(routing) {
+      const tbody = document.getElementById("routing-table");
+      const rows = Array.isArray(routing?.rows) ? routing.rows : [];
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7">No routing resources yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map((row) => `
+        <tr>
+          <td>${row.kind || ""}</td>
+          <td>${row.owner_name || ""}</td>
+          <td>${row.provider || ""}</td>
+          <td>${row.model || ""}</td>
+          <td>${row.resource_name || ""}</td>
+          <td>${row.available_slots_per_minute ?? 0}</td>
+          <td>${row.route_status || ""}</td>
         </tr>
       `).join("");
     }
@@ -432,7 +482,8 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       renderMetrics("session-metrics", data.sessions || {});
       renderMetrics("heartbeat-metrics", data.heartbeat || {});
       renderNetworkMap(data.network_map || {});
-      renderPeers(data.peers || []);
+      renderPeers(data.peers || [], data.masters || []);
+      renderRouting(data.routing || {});
       document.getElementById("raw-status").textContent = JSON.stringify(data, null, 2);
     }
 

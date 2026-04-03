@@ -989,6 +989,11 @@ async def p2p_reregister_to_master(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/internal/p2p/network-map", tags=["Internal"])
+async def get_internal_p2p_network_map() -> dict:
+    return p2p_service.export_network_map()
+
+
 @router.get("/admin/limits/estimated", tags=["Admin"])
 async def get_estimated_limits() -> dict:
     return _load_estimated_limits()

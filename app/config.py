@@ -58,6 +58,8 @@ class Settings:
     P2P_SHARE_CAPACITY: bool = os.getenv("P2P_SHARE_CAPACITY", "true").lower() in ("1", "true", "yes")
     P2P_SHARED_RPM_RATIO: float = float(os.getenv("P2P_SHARED_RPM_RATIO", "1.0"))
     P2P_SHARED_TPM_RATIO: float = float(os.getenv("P2P_SHARED_TPM_RATIO", "1.0"))
+    P2P_MAX_CLIENT_SLOTS_PER_MIN: int = int(os.getenv("P2P_MAX_CLIENT_SLOTS_PER_MIN", "1"))
+    P2P_MAX_SHARED_SLOTS_PER_MIN: int = int(os.getenv("P2P_MAX_SHARED_SLOTS_PER_MIN", "5"))
     P2P_MAX_REMOTE_SESSIONS: int = int(os.getenv("P2P_MAX_REMOTE_SESSIONS", "3"))
     P2P_MAX_OUTGOING_SESSIONS: int = int(os.getenv("P2P_MAX_OUTGOING_SESSIONS", "5"))
     P2P_MAX_QUEUE_SIZE: int = int(os.getenv("P2P_MAX_QUEUE_SIZE", "50"))

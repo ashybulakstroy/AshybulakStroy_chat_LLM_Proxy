@@ -58,6 +58,39 @@ async def _run_p2p_recovery_background() -> None:
         logger.exception("p2p_recovery_failed error=%s", str(exc))
 
 
+async def _run_p2p_validation_background() -> None:
+    try:
+        result = await p2p_service.validate_cached_routes()
+        logger.info(
+            "p2p_validation_completed validated=%s failed=%s changed=%s",
+            result.get("validated", 0),
+            result.get("failed", 0),
+            result.get("changed", 0),
+        )
+    except Exception as exc:
+        logger.exception("p2p_validation_failed error=%s", str(exc))
+
+
+async def _run_p2p_peer_sync_background() -> None:
+    try:
+        if settings.P2P_ENABLED and settings.NODE_MODE == "peer" and settings.P2P_MASTER_URL:
+            heartbeat = await p2p_service.send_local_heartbeat(reason="peer_startup")
+            logger.info(
+                "p2p_peer_startup_heartbeat status=%s master_url=%s",
+                heartbeat.get("status"),
+                heartbeat.get("master_url"),
+            )
+            pulled = await p2p_service.pull_network_map()
+            logger.info(
+                "p2p_peer_network_map_sync imported_peers=%s imported_masters=%s changed=%s",
+                pulled.get("imported_peers", 0),
+                pulled.get("imported_masters", 0),
+                pulled.get("changed", False),
+            )
+    except Exception as exc:
+        logger.exception("p2p_peer_sync_failed error=%s", str(exc))
+
+
 @app.on_event("startup")
 async def startup_probe_limits() -> None:
     logger.info(
@@ -75,7 +108,10 @@ async def startup_probe_limits() -> None:
         snapshot_result.get("loaded_peers", 0),
         snapshot_result.get("path"),
     )
+    p2p_service.ensure_master_route_from_config()
     asyncio.create_task(_run_startup_probe_background())
+    asyncio.create_task(_run_p2p_peer_sync_background())
+    asyncio.create_task(_run_p2p_validation_background())
     asyncio.create_task(_run_p2p_recovery_background())
 
 
