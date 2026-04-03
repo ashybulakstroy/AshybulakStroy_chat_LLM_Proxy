@@ -119,22 +119,49 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       font-size: 14px;
     }
     button {
-      cursor: pointer;
-      background: var(--accent);
-      color: white;
-      border: 0;
-      box-shadow: 0 14px 36px rgba(31, 45, 43, 0.08);
-    }
+        cursor: pointer;
+        background: var(--accent);
+        color: white;
+        border: 0;
+        box-shadow: 0 14px 36px rgba(31, 45, 43, 0.08);
+      }
+    button.table-action {
+        width: auto;
+        min-width: 0;
+        padding: 8px 14px;
+        white-space: nowrap;
+        font-size: 13px;
+      }
     table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 760px;
-    }
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 760px;
+      }
+    .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+      }
+    table.peer-table {
+        min-width: 0;
+        table-layout: fixed;
+      }
+    table.peer-table th,
+    table.peer-table td {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+    .mono-wrap {
+        word-break: break-all;
+        overflow-wrap: anywhere;
+      }
+    .compact-lines {
+        line-height: 1.25;
+      }
     th, td {
-      text-align: left;
-      padding: 12px 10px;
-      border-top: 1px solid var(--line);
-      vertical-align: top;
+        text-align: left;
+        padding: 12px 10px;
+        border-top: 1px solid var(--line);
+        vertical-align: top;
       font-size: 14px;
       line-height: 1.35;
     }
@@ -204,13 +231,13 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         </table>
     </section>
 
-    <section class="panel" style="margin-bottom: 18px;">
-      <h2>Known Peers</h2>
-      <table>
-        <thead>
-          <tr>
-              <th>Mode</th>
-            <th>Peer ID</th>
+      <section class="panel" style="margin-bottom: 18px;">
+        <h2 id="known-peers-title">Known Peers (0)</h2>
+        <table class="peer-table">
+          <thead>
+            <tr>
+                <th>Mode</th>
+              <th>Peer ID</th>
             <th>Name</th>
             <th>Mode</th>
             <th>Scope</th>
@@ -219,17 +246,18 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
             <th>Route Type</th>
             <th>Health</th>
             <th>Capabilities</th>
-            <th>Providers / Models</th>
-            <th>Active</th>
-            <th>Heartbeat</th>
-            <th>URL</th>
-          </tr>
-        </thead>
-        <tbody id="peer-table">
-          <tr><td colspan="14">No peers discovered yet.</td></tr>
-        </tbody>
-      </table>
-    </section>
+              <th>Providers / Models</th>
+              <th>Active</th>
+              <th>Heartbeat</th>
+              <th>URL</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="peer-table">
+            <tr><td colspan="15">No peers discovered yet.</td></tr>
+          </tbody>
+        </table>
+      </section>
 
     <section class="panel" style="margin-bottom: 18px;">
       <h2>Маршрутизация</h2>
@@ -420,41 +448,75 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       return `${diffSec} sec ago`;
     }
 
+    function formatPeerKey(value) {
+      const text = String(value || "");
+      return text
+        .replaceAll("::", "::​")
+        .replaceAll("://", "://​")
+        .replaceAll("/", "/​");
+    }
+
+    function formatCapabilities(peer) {
+      return [
+        `chat=${Boolean(peer.supports_chat)}`,
+        `emb=${Boolean(peer.supports_embeddings)}`,
+        `remote=${Boolean(peer.accept_remote_tasks)}`,
+        `direct=${Boolean(peer.direct_provider_access)}`,
+      ].join("<br>");
+    }
+
+    function formatProvidersModels(peer) {
+      const providers = (peer.providers || []).join(", ");
+      const models = (peer.models || []).slice(0, 3).join(", ");
+      return `${providers}${models ? `<br>${models}` : ""}`;
+    }
+
     function renderPeers(peers, masters) {
       const tbody = document.getElementById("peer-table");
+      const title = document.getElementById("known-peers-title");
       const peerRows = Array.isArray(peers) ? peers : [];
       const masterRows = Array.isArray(masters) ? masters : [];
       const rows = [
         ...masterRows.map((item) => ({ kind: "master", row_id: item.route_id || item.base_url || "", ...item })),
         ...peerRows.map((item) => ({ kind: "peer", row_id: item.peer_id || "", ...item })),
       ];
+      if (title) {
+        title.textContent = `Known Peers (${rows.length})`;
+      }
       if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="14">No peers discovered yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="15">No peers discovered yet.</td></tr>';
         return;
       }
-        tbody.innerHTML = rows.map((peer) => `
-          <tr${Number(peer.health_score ?? "") === 0 ? ' style="background:#fff1f2;"' : ""}>
-            <td>${peer.kind || ""}</td>
-            <td>${peer.peer_id || peer.route_id || ""}</td>
-            <td>${peer.node_name || ""}</td>
-          <td>${peer.node_mode || ""}</td>
-          <td>${peer.scope || ""}</td>
-          <td>${peer.runtime_status || peer.status || ""}</td>
-          <td>${peer.route_status || ""}</td>
-          <td>${peer.direct_provider_access ? "direct" : "link-only"}</td>
-          <td>${peer.health_score ?? ""}</td>
-            <td>chat=${Boolean(peer.supports_chat)} / emb=${Boolean(peer.supports_embeddings)} / remote=${Boolean(peer.accept_remote_tasks)} / direct=${Boolean(peer.direct_provider_access)}</td>
-            <td>${(peer.providers || []).join(", ")}<br>${(peer.models || []).slice(0, 3).join(", ")}</td>
-            <td>${peer.active_sessions ?? 0}</td>
-            <td>${formatHeartbeatAge(peer.last_heartbeat_at)}</td>
-            <td>${peer.base_url || ""}</td>
-          </tr>
-        `).join("");
-    }
+          tbody.innerHTML = rows.map((peer) => `
+            <tr${Number(peer.health_score ?? "") === 0 ? ' style="background:#fff1f2;"' : ""}>
+              <td>${peer.kind || ""}</td>
+              <td class="mono-wrap">${formatPeerKey(peer.peer_id || peer.route_id || "")}</td>
+              <td>${peer.node_name || ""}</td>
+            <td>${peer.node_mode || ""}</td>
+            <td>${peer.scope || ""}</td>
+            <td>${peer.runtime_status || peer.status || ""}</td>
+            <td>${peer.route_status || ""}</td>
+            <td>${peer.direct_provider_access ? "direct" : "link-only"}</td>
+            <td>${peer.health_score ?? ""}</td>
+              <td class="compact-lines">${formatCapabilities(peer)}</td>
+                <td class="compact-lines">${formatProvidersModels(peer)}</td>
+                <td>${peer.active_sessions ?? 0}</td>
+                <td>${formatHeartbeatAge(peer.last_heartbeat_at)}</td>
+                <td class="mono-wrap">${formatPeerKey(peer.base_url || "")}</td>
+                <td>${(String(peer.runtime_status || peer.status || "").toLowerCase() === "error" && Number(peer.health_score ?? "") === 0)
+                ? `<button class="secondary table-action" data-remove-kind="${peer.kind || ""}" data-remove-key="${peer.peer_id || peer.route_id || ""}">X</button>`
+                : ""}</td>
+            </tr>
+          `).join("");
+      }
 
     function renderRouting(routing) {
       const tbody = document.getElementById("routing-table");
+      const title = document.getElementById("routing-title");
       const rows = Array.isArray(routing?.rows) ? routing.rows : [];
+      if (title) {
+        title.textContent = `Маршрутизация (${rows.length})`;
+      }
       if (rows.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7">No routing resources yet.</td></tr>';
         return;
@@ -580,17 +642,29 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       await loadStatus();
     });
 
-    document.getElementById("run-dispatch-preview").addEventListener("click", async () => {
-      const payload = await postForm("/admin/p2p/dispatch/preview", {
-        requested_provider: document.getElementById("dispatch-provider").value || "auto",
-        requested_model: document.getElementById("dispatch-model").value || "auto",
-        requested_mode: document.getElementById("dispatch-mode").value || "",
-        task_type: document.getElementById("dispatch-task-type").value || "chat_completion"
+      document.getElementById("run-dispatch-preview").addEventListener("click", async () => {
+        const payload = await postForm("/admin/p2p/dispatch/preview", {
+          requested_provider: document.getElementById("dispatch-provider").value || "auto",
+          requested_model: document.getElementById("dispatch-model").value || "auto",
+          requested_mode: document.getElementById("dispatch-mode").value || "",
+          task_type: document.getElementById("dispatch-task-type").value || "chat_completion"
+        });
+        document.getElementById("dispatch-preview-output").textContent = JSON.stringify(payload, null, 2);
       });
-      document.getElementById("dispatch-preview-output").textContent = JSON.stringify(payload, null, 2);
-    });
 
-    loadStatus();
+      document.getElementById("peer-table").addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-remove-kind][data-remove-key]");
+        if (!button) {
+          return;
+        }
+        await postForm("/admin/p2p/nodes/remove", {
+          kind: button.dataset.removeKind,
+          node_key: button.dataset.removeKey
+        });
+        await loadStatus();
+      });
+
+      loadStatus();
   </script>
 </body>
 </html>

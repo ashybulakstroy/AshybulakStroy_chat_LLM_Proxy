@@ -602,6 +602,42 @@ class P2PService:
             self.save_network_snapshot()
         return dict(peer)
 
+    def remove_known_node(self, *, kind: str, node_key: str) -> dict[str, Any]:
+        normalized_kind = str(kind or "").strip().lower()
+        normalized_key = str(node_key or "").strip()
+        if normalized_kind not in {"peer", "master"}:
+            raise ValueError("kind must be 'peer' or 'master'")
+        if not normalized_key:
+            raise ValueError("node_key is required")
+
+        removed: dict[str, Any] | None = None
+        with self._lock:
+            if normalized_kind == "peer":
+                removed = self._known_peers.pop(normalized_key, None)
+            else:
+                local_master_route_id = self._route_id_from_url(self._local_base_url(), "master")
+                if normalized_key == local_master_route_id:
+                    raise ValueError("cannot remove local master node")
+                removed = self._known_masters.pop(normalized_key, None)
+
+        if removed is None:
+            raise ValueError(f"{normalized_kind} node '{normalized_key}' not found")
+
+        self._logger.info(
+            "p2p_node_removed kind=%s node_key=%s node_name=%s base_url=%s",
+            normalized_kind,
+            normalized_key,
+            removed.get("node_name"),
+            removed.get("base_url"),
+        )
+        self.save_network_snapshot()
+        return {
+            "status": "ok",
+            "removed_kind": normalized_kind,
+            "removed_key": normalized_key,
+            "removed_node_name": removed.get("node_name"),
+        }
+
     def set_session_counters(
         self,
         *,

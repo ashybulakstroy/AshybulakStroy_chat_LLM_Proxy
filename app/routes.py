@@ -418,6 +418,19 @@ def _build_validated_llm_cache_payload(
     }
 
 
+def _group_models_by_id(candidate_models: list[dict]) -> list[tuple[str, list[dict]]]:
+    grouped: dict[str, list[dict]] = {}
+    for model in candidate_models:
+        if not isinstance(model, dict):
+            continue
+        provider_name = str(model.get("provider") or "").strip()
+        model_id = str(model.get("id") or "").strip()
+        if not provider_name or not model_id:
+            continue
+        grouped.setdefault(model_id, []).append(model)
+    return sorted(grouped.items(), key=lambda item: item[0].lower())
+
+
 async def _execute_model_test(provider_name: str, model_id: str) -> tuple[bool | None, str | None, str | None]:
     request = ChatCompletionRequest(
         provider=provider_name,
@@ -465,33 +478,55 @@ async def _validate_llm_models(candidate_models: list[dict], merge_existing: boo
     passed = 0
     failed = 0
 
-    for model in candidate_models:
-        provider_name = model.get("provider")
-        model_id = model.get("id")
-        if not provider_name or not model_id:
-            continue
+    grouped_models = _group_models_by_id(candidate_models)
 
-        passed_validation, message_excerpt, error_text = await _execute_model_test(provider_name, model_id)
+    for group_index, (model_id, group_models) in enumerate(grouped_models):
+        logger.info("llm_validation_group_started model_id=%s providers=%s", model_id, len(group_models))
+        group_tasks = [
+            _execute_model_test(str(model.get("provider") or "").strip(), model_id)
+            for model in group_models
+        ]
+        group_results = await asyncio.gather(*group_tasks)
 
-        new_results[_model_validation_key(provider_name, model_id)] = {
-            "provider": provider_name,
-            "model_id": model_id,
-            "passed": passed_validation,
-            "message_excerpt": message_excerpt,
-            "error": error_text,
-        }
+        merge_payload: dict[str, dict] = {}
+        for model, result in zip(group_models, group_results):
+            provider_name = str(model.get("provider") or "").strip()
+            if not provider_name:
+                continue
+            passed_validation, message_excerpt, error_text = result
+            key = _model_validation_key(provider_name, model_id)
+            new_results[key] = {
+                "provider": provider_name,
+                "model_id": model_id,
+                "passed": passed_validation,
+                "message_excerpt": message_excerpt,
+                "error": error_text,
+            }
+            merge_payload[key] = new_results[key]
 
-        validation_payload = _merge_validation_results(
-            validation_payload,
-            {_model_validation_key(provider_name, model_id): new_results[_model_validation_key(provider_name, model_id)]},
-            datetime.now(timezone.utc).isoformat(),
+            if passed_validation:
+                passed += 1
+            else:
+                failed += 1
+
+        if merge_payload:
+            validation_payload = _merge_validation_results(
+                validation_payload,
+                merge_payload,
+                datetime.now(timezone.utc).isoformat(),
+            )
+            _save_model_validation_results(validation_payload)
+
+        logger.info(
+            "llm_validation_group_completed model_id=%s providers=%s passed=%s failed=%s",
+            model_id,
+            len(group_models),
+            sum(1 for item in merge_payload.values() if item.get("passed") is True),
+            sum(1 for item in merge_payload.values() if item.get("passed") is not True),
         )
-        _save_model_validation_results(validation_payload)
 
-        if passed_validation:
-            passed += 1
-        else:
-            failed += 1
+        if group_index < len(grouped_models) - 1:
+            await asyncio.sleep(1)
 
     return {
         "status": "ok",
@@ -527,24 +562,48 @@ async def _run_validated_llm_job(started_by: str) -> None:
         passed = 0
         failed = 0
 
-        for index, model in enumerate(ordered_candidates, start=1):
-            provider_name = model.get("provider")
-            model_id = model.get("id")
-            if not provider_name or not model_id:
-                continue
+        grouped_candidates = _group_models_by_id(ordered_candidates)
 
-            VALIDATED_LLM_JOB_STATE["requests_started"] = index
-            passed_validation, message_excerpt, error_text = await _execute_model_test(provider_name, model_id)
-            _store_model_test_result(provider_name, model_id, passed_validation, message_excerpt, error_text)
-            VALIDATED_LLM_JOB_STATE["responses_received"] += 1
+        for group_index, (model_id, group_models) in enumerate(grouped_candidates):
+            logger.info("llm_validation_job_group_started model_id=%s providers=%s", model_id, len(group_models))
+            VALIDATED_LLM_JOB_STATE["requests_started"] += len(group_models)
 
-            if passed_validation:
-                passed += 1
-            else:
-                failed += 1
+            group_tasks = [
+                _execute_model_test(str(model.get("provider") or "").strip(), model_id)
+                for model in group_models
+            ]
+            group_results = await asyncio.gather(*group_tasks)
 
-            VALIDATED_LLM_JOB_STATE["passed"] = passed
-            VALIDATED_LLM_JOB_STATE["failed"] = failed
+            group_passed = 0
+            group_failed = 0
+            for model, result in zip(group_models, group_results):
+                provider_name = str(model.get("provider") or "").strip()
+                if not provider_name:
+                    continue
+                passed_validation, message_excerpt, error_text = result
+                _store_model_test_result(provider_name, model_id, passed_validation, message_excerpt, error_text)
+                VALIDATED_LLM_JOB_STATE["responses_received"] += 1
+
+                if passed_validation:
+                    passed += 1
+                    group_passed += 1
+                else:
+                    failed += 1
+                    group_failed += 1
+
+                VALIDATED_LLM_JOB_STATE["passed"] = passed
+                VALIDATED_LLM_JOB_STATE["failed"] = failed
+
+            logger.info(
+                "llm_validation_job_group_completed model_id=%s providers=%s passed=%s failed=%s",
+                model_id,
+                len(group_models),
+                group_passed,
+                group_failed,
+            )
+
+            if group_index < len(grouped_candidates) - 1:
+                await asyncio.sleep(1)
 
         validation_payload = _load_model_validation_results()
         validated_llm_payload = _build_validated_llm_cache_payload(ordered_candidates, validation_payload)
@@ -974,6 +1033,17 @@ async def update_p2p_session_counters(
         active_outgoing_sessions=active_outgoing_sessions,
         queued_tasks=queued_tasks,
     )
+
+
+@router.post("/admin/p2p/nodes/remove", tags=["Admin"])
+async def remove_p2p_node(
+    kind: str = Query(...),
+    node_key: str = Query(...),
+) -> dict:
+    try:
+        return p2p_service.remove_known_node(kind=kind, node_key=node_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/admin/p2p/dispatch/preview", tags=["Admin"])
