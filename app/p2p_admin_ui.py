@@ -241,7 +241,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
             <th>Name</th>
             <th>Mode</th>
             <th>Scope</th>
-            <th>Status</th>
+              <th>Run</th>
             <th>Route Status</th>
             <th>Route Type</th>
             <th>Health</th>
@@ -260,7 +260,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       </section>
 
     <section class="panel" style="margin-bottom: 18px;">
-      <h2>Маршрутизация</h2>
+      <h2 id="routing-title">Маршрутизация (0)</h2>
       <table>
         <thead>
           <tr>
