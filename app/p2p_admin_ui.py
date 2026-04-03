@@ -169,20 +169,39 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
     </section>
 
     <section class="panel" style="margin-bottom: 18px;">
+      <h2>Online Resource Summary</h2>
+      <table>
+        <thead>
+            <tr>
+              <th>Online Routes</th>
+              <th>Routes With FREE Slots</th>
+              <th>Routes Without FREE Slots</th>
+              <th>Shared Slots Total</th>
+              <th>Busy Slots</th>
+            </tr>
+          </thead>
+          <tbody id="online-resource-summary-table">
+            <tr><td colspan="5">No summary yet.</td></tr>
+          </tbody>
+        </table>
+    </section>
+
+    <section class="panel" style="margin-bottom: 18px;">
       <h2>Network Map</h2>
       <table>
         <thead>
-          <tr>
-            <th>Segment</th>
-            <th>Count</th>
-            <th>Providers</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody id="network-map-table">
-          <tr><td colspan="4">No network map data yet.</td></tr>
-        </tbody>
-      </table>
+            <tr>
+              <th>Segment</th>
+              <th>Count</th>
+              <th>Providers</th>
+              <th>Routes</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="network-map-table">
+          <tr><td colspan="5">No network map data yet.</td></tr>
+          </tbody>
+        </table>
     </section>
 
     <section class="panel" style="margin-bottom: 18px;">
@@ -190,7 +209,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       <table>
         <thead>
           <tr>
-            <th>Kind</th>
+              <th>Mode</th>
             <th>Peer ID</th>
             <th>Name</th>
             <th>Mode</th>
@@ -372,6 +391,35 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       });
     }
 
+    function renderOnlineResourceSummary(data) {
+      const tbody = document.getElementById("online-resource-summary-table");
+      if (!data || Object.keys(data).length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5">No summary yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = `
+          <tr>
+            <td>${data.ready_routes ?? 0}</td>
+            <td>${data.routes_with_slots ?? 0}</td>
+            <td>${data.routes_without_free_slots ?? 0}</td>
+            <td>${data.shared_slots_total ?? 0}</td>
+            <td>${data.busy_slots ?? 0}</td>
+          </tr>
+        `;
+    }
+
+    function formatHeartbeatAge(value) {
+      if (!value) {
+        return "";
+      }
+      const timestamp = Date.parse(value);
+      if (Number.isNaN(timestamp)) {
+        return value;
+      }
+      const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+      return `${diffSec} sec ago`;
+    }
+
     function renderPeers(peers, masters) {
       const tbody = document.getElementById("peer-table");
       const peerRows = Array.isArray(peers) ? peers : [];
@@ -384,24 +432,24 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         tbody.innerHTML = '<tr><td colspan="14">No peers discovered yet.</td></tr>';
         return;
       }
-      tbody.innerHTML = rows.map((peer) => `
-        <tr>
-          <td>${peer.kind || ""}</td>
-          <td>${peer.peer_id || peer.route_id || ""}</td>
-          <td>${peer.node_name || ""}</td>
+        tbody.innerHTML = rows.map((peer) => `
+          <tr${Number(peer.health_score ?? "") === 0 ? ' style="background:#fff1f2;"' : ""}>
+            <td>${peer.kind || ""}</td>
+            <td>${peer.peer_id || peer.route_id || ""}</td>
+            <td>${peer.node_name || ""}</td>
           <td>${peer.node_mode || ""}</td>
           <td>${peer.scope || ""}</td>
           <td>${peer.runtime_status || peer.status || ""}</td>
           <td>${peer.route_status || ""}</td>
           <td>${peer.direct_provider_access ? "direct" : "link-only"}</td>
           <td>${peer.health_score ?? ""}</td>
-          <td>chat=${Boolean(peer.supports_chat)} / emb=${Boolean(peer.supports_embeddings)} / remote=${Boolean(peer.accept_remote_tasks)} / direct=${Boolean(peer.direct_provider_access)}</td>
-          <td>${(peer.providers || []).join(", ")}<br>${(peer.models || []).slice(0, 3).join(", ")}</td>
-          <td>${peer.active_sessions ?? 0}</td>
-          <td>${peer.last_heartbeat_at || ""}</td>
-          <td>${peer.base_url || ""}</td>
-        </tr>
-      `).join("");
+            <td>chat=${Boolean(peer.supports_chat)} / emb=${Boolean(peer.supports_embeddings)} / remote=${Boolean(peer.accept_remote_tasks)} / direct=${Boolean(peer.direct_provider_access)}</td>
+            <td>${(peer.providers || []).join(", ")}<br>${(peer.models || []).slice(0, 3).join(", ")}</td>
+            <td>${peer.active_sessions ?? 0}</td>
+            <td>${formatHeartbeatAge(peer.last_heartbeat_at)}</td>
+            <td>${peer.base_url || ""}</td>
+          </tr>
+        `).join("");
     }
 
     function renderRouting(routing) {
@@ -427,7 +475,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
     function renderNetworkMap(networkMap) {
       const tbody = document.getElementById("network-map-table");
       if (!networkMap) {
-        tbody.innerHTML = '<tr><td colspan="4">No network map data yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5">No network map data yet.</td></tr>';
         return;
       }
       const rows = [
@@ -435,29 +483,33 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
           segment: "Masters",
           count: networkMap.master_nodes?.count ?? 0,
           providers: networkMap.master_nodes?.direct_provider_count ?? 0,
+          routes: networkMap.master_nodes?.route_count ?? 0,
           notes: `role=${networkMap.master_nodes?.role ?? ""} / direct=${Boolean(networkMap.master_nodes?.direct_provider_access)}`
         },
         {
           segment: "Peers",
           count: networkMap.peer_nodes?.count ?? 0,
           providers: networkMap.peer_nodes?.direct_provider_count ?? 0,
+          routes: networkMap.peer_nodes?.route_count ?? 0,
           notes: `direct peers=${networkMap.peer_nodes?.direct_peer_count ?? 0} / link-only peers=${networkMap.peer_nodes?.link_only_peer_count ?? 0}`
         },
         {
           segment: "Direct Provider Links",
           count: networkMap.routes?.direct_provider_links ?? 0,
           providers: "-",
+          routes: networkMap.routes?.online_route_count ?? 0,
           notes: "only node/provider links with direct provider access"
         }
       ];
       tbody.innerHTML = rows.map((row) => `
-        <tr>
-          <td>${row.segment}</td>
-          <td>${row.count}</td>
-          <td>${row.providers}</td>
-          <td>${row.notes}</td>
-        </tr>
-      `).join("");
+          <tr>
+            <td>${row.segment}</td>
+            <td>${row.count}</td>
+            <td>${row.providers}</td>
+            <td>${row.routes}</td>
+            <td>${row.notes}</td>
+          </tr>
+        `).join("");
     }
 
     async function postForm(url, params) {
@@ -481,6 +533,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
       renderMetrics("limit-metrics", data.limits || {});
       renderMetrics("session-metrics", data.sessions || {});
       renderMetrics("heartbeat-metrics", data.heartbeat || {});
+      renderOnlineResourceSummary(data.online_resource_summary || {});
       renderNetworkMap(data.network_map || {});
       renderPeers(data.peers || [], data.masters || []);
       renderRouting(data.routing || {});

@@ -24,6 +24,31 @@ app.include_router(router)
 provider_router = ProviderRouter()
 logger = logging.getLogger("ashybulak.proxy")
 
+STARTUP_BANNER = r"""
+================================================================================
+================================================================================
+
+   ##       ##       ###      ###         ######     #####     ###### 
+   ##       ##       ####    ####         ##   ##   ##   ##    ##   ##
+   ##       ##       ## ##  ## ##         ##   ##        ##    ##   ##
+   ##       ##       ##  ## ## ##         ######        ##     ###### 
+   ##       ##       ##   ###  ##         ##           ##      ##     
+   ##       ##       ##        ##         ##          ##       ##     
+   #######  #######  ##        ##         ##         ######    ##     
+
+               ##   ##  ##   ##  ######                 
+               ##   ##  ##   ##  ##   ##                
+               ##   ##  ##   ##  ##   ##                
+               #######  ##   ##  ######                 
+               ##   ##  ##   ##  ##   ##                
+               ##   ##  ##   ##  ##   ##                
+               ##   ##   #####   ######                 
+
+================================================================================
+================ [ ASHYBULAKSTROY AI HUB v1.0 ] ================
+================================================================================
+""".strip("\n")
+
 
 async def _run_startup_probe_background() -> None:
     try:
@@ -93,6 +118,7 @@ async def _run_p2p_peer_sync_background() -> None:
 
 @app.on_event("startup")
 async def startup_probe_limits() -> None:
+    logger.info("\n%s", STARTUP_BANNER)
     logger.info(
         "server_started host=0.0.0.0 port=%s health_url=http://127.0.0.1:%s/health",
         settings.PORT,

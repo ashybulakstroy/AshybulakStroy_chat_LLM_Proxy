@@ -34,14 +34,11 @@ GEMINI_FREE_TIER_PREFIXES = (
     "models/gemini-2.0-flash-lite",
     "models/gemma-",
 )
-TEST_PROMPT = "РђСЃСЃР°Р»Р°РјСѓ Р°Р»РµР№РєСѓРј!. Р’РµСЂРЅРё РЈР° РђР»РµР№РєСѓРј РђСЃСЃР°Р»Р°Рј!"
-EXPECTED_TEST_REPLY = "СѓР° Р°Р»РµР№РєСѓРј Р°СЃСЃР°Р»Р°Рј"
-
-TEST_PROMPT = "РђСЃСЃР°Р»Р°РјСѓ Р°Р»РµР№РєСѓРј!. Р’РµСЂРЅРё РЈР° РђР»РµР№РєСѓРј РђСЃСЃР°Р»Р°Рј!"
+TEST_PROMPT = "Ассаламу алейкум! Верни: Ва алейкум ассалам!"
 EXPECTED_TEST_REPLIES = {
-    "РІР° Р°Р»РµР№РєСѓРј Р°СЃСЃР°Р»Р°Рј",
-    "РІР° Р°Р»РµР№РєСѓРј Р°СЃСЃ СЃР°Р»Р°Рј",
-    "Щ€Ш№Щ„ЩЉЩѓЩ… Ш§Щ„ШіЩ„Ш§Щ…",
+    "ва алейкум ассалам",
+    "ва алейкум асс салам",
+    "وعليكم السلام",
 }
 VALIDATED_LLM_JOB_STATE = {
     "status": "idle",
@@ -353,13 +350,18 @@ def _block_two_model_keys(models: list[dict]) -> set[str]:
     }
 
 
-def _remaining_llm_models(all_models: list[dict]) -> list[dict]:
+def _block_two_llm_candidates(all_models: list[dict]) -> list[dict]:
     current_plan_models = _filter_models_for_current_plan(all_models)
-    block_two_models = _live_limit_models(current_plan_models)
+    live_limit_models = _filter_models_with_live_limits(current_plan_models)
+    return [model for model in live_limit_models if _category_for_model(model) == "llm"]
+
+
+def _remaining_llm_models(all_models: list[dict]) -> list[dict]:
+    block_two_models = _block_two_llm_candidates(all_models)
     excluded_keys = _block_two_model_keys(block_two_models)
     return [
         model
-        for model in current_plan_models
+        for model in _filter_models_for_current_plan(all_models)
         if _category_for_model(model) == "llm"
         and _model_validation_key(model.get("provider", ""), model.get("id", "")) not in excluded_keys
     ]
@@ -385,13 +387,13 @@ def _merge_validation_results(existing_payload: dict, new_results: dict, validat
 
 
 def _build_validated_llm_cache_payload(
-    remaining_models: list[dict],
+    candidate_models: list[dict],
     validation_payload: dict,
 ) -> dict:
     validation_models = validation_payload.get("models", {})
     passed_models = []
 
-    for model in remaining_models:
+    for model in candidate_models:
         key = _model_validation_key(model.get("provider", ""), model.get("id", ""))
         validation_item = validation_models.get(key, {})
         if validation_item.get("passed") is True:
@@ -407,9 +409,9 @@ def _build_validated_llm_cache_payload(
         "object": "list",
         "data": passed_models,
         "meta": {
-            "filter": "remaining_llm_passed_validation",
+            "filter": "block_two_first_then_remaining_llm_passed_validation",
             "validated_at": validation_payload.get("validated_at"),
-            "total_candidates": len(remaining_models),
+            "total_candidates": len(candidate_models),
             "total_after_filter": len(passed_models),
             "cache_created_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -507,15 +509,25 @@ async def _run_validated_llm_job(started_by: str) -> None:
     try:
         models_payload = await provider_router.get_models()
         all_models = models_payload.get("data", [])
-        block_two_payload = await get_available_models_for_admin()
-        excluded_keys = _block_two_model_keys(block_two_payload.get("data", []))
+        block_two_priority_models = _block_two_llm_candidates(all_models)
+        excluded_keys = _block_two_model_keys(block_two_priority_models)
         remaining_models = _remaining_llm_models_from_keys(all_models, excluded_keys)
+        validation_candidates = [*block_two_priority_models, *remaining_models]
 
-        VALIDATED_LLM_JOB_STATE["total_models"] = len(remaining_models)
+        seen_candidate_keys: set[str] = set()
+        ordered_candidates: list[dict] = []
+        for model in validation_candidates:
+            key = _model_validation_key(model.get("provider", ""), model.get("id", ""))
+            if not key or key in seen_candidate_keys:
+                continue
+            seen_candidate_keys.add(key)
+            ordered_candidates.append(model)
+
+        VALIDATED_LLM_JOB_STATE["total_models"] = len(ordered_candidates)
         passed = 0
         failed = 0
 
-        for index, model in enumerate(remaining_models, start=1):
+        for index, model in enumerate(ordered_candidates, start=1):
             provider_name = model.get("provider")
             model_id = model.get("id")
             if not provider_name or not model_id:
@@ -535,7 +547,8 @@ async def _run_validated_llm_job(started_by: str) -> None:
             VALIDATED_LLM_JOB_STATE["failed"] = failed
 
         validation_payload = _load_model_validation_results()
-        validated_llm_payload = _build_validated_llm_cache_payload(remaining_models, validation_payload)
+        validated_llm_payload = _build_validated_llm_cache_payload(ordered_candidates, validation_payload)
+        block_two_payload = await get_available_models_for_admin()
         await _refresh_admin_cache_async(
             all_models=all_models,
             block_two_payload=block_two_payload,
@@ -600,10 +613,15 @@ def _category_for_model(model: dict) -> str:
         "llama",
         "gpt",
         "gemini",
+        "gemma",
+        "glm",
         "qwen",
         "deepseek",
         "claude",
         "mistral",
+        "allam",
+        "minimax",
+        "compound",
         "command",
         "language",
         "reason",

@@ -16,6 +16,7 @@ from app.config import settings
 VALID_NODE_MODES = {"peer", "auto", "master_cache", "master"}
 VALID_DISPATCH_MODES = {"FAST", "LOAD_BALANCE", "LOCAL_FIRST", "COST_EFFECTIVE"}
 P2P_NETWORK_FILE = Path(__file__).resolve().parent.parent / "p2p_network_snapshot.json"
+ADMIN_CACHE_FILE = Path(__file__).resolve().parent.parent / "admin_dashboard_cache.json"
 
 
 @dataclass
@@ -83,6 +84,14 @@ class P2PService:
         if not raw:
             return []
         return [item.strip() for item in raw.split(",") if item.strip()]
+
+    def _load_local_admin_cache(self) -> dict[str, Any]:
+        if not ADMIN_CACHE_FILE.exists():
+            return {}
+        try:
+            return json.loads(ADMIN_CACHE_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
 
     def _to_bool(self, value: Any, default: bool = False) -> bool:
         if isinstance(value, bool):
@@ -225,14 +234,55 @@ class P2PService:
             ]
         return [{"provider": provider, "model": "auto"} for provider in clean_providers]
 
-    def _route_slots_per_minute(self, route_owner: dict[str, Any], route_count: int) -> int:
+    def _local_llm_route_pairs(self) -> list[dict[str, str]]:
+        cache = self._load_local_admin_cache()
+        validated = ((cache.get("validated_llm") or {}).get("data") or [])
+        if validated:
+            routes = [
+                {
+                    "provider": str(item.get("provider") or "").strip(),
+                    "model": str(item.get("id") or "").strip(),
+                }
+                for item in validated
+                if isinstance(item, dict) and item.get("provider") and item.get("id")
+            ]
+            return [item for item in routes if item["provider"] and item["model"]]
+
+        block_two = ((cache.get("block_two") or {}).get("data") or [])
+        routes = []
+        for item in block_two:
+            if not isinstance(item, dict):
+                continue
+            provider = str(item.get("provider") or "").strip()
+            model_id = str(item.get("id") or "").strip()
+            category = str(item.get("category") or "").strip().lower()
+            if provider and model_id and category == "llm":
+                routes.append({"provider": provider, "model": model_id})
+        return routes
+
+    def _build_owner_route_pairs(self, owner: dict[str, Any]) -> list[dict[str, str]]:
+        if owner.get("kind") == "master" and str(owner.get("base_url") or "").rstrip("/") == self._local_base_url().rstrip("/"):
+            local_routes = self._local_llm_route_pairs()
+            if local_routes:
+                return local_routes
+        return self._build_route_pairs(
+            list(owner.get("providers") or []),
+            list(owner.get("models") or []),
+        )
+
+    def _route_slot_values(self, route_owner: dict[str, Any], route_count: int) -> list[int]:
         route_total = max(1, route_count)
         shared_ratio = self._safe_ratio(route_owner.get("shared_rpm_ratio", 1.0))
         shared_slots_budget = max(1, int(settings.P2P_MAX_SHARED_SLOTS_PER_MIN * shared_ratio))
         client_slots_budget = max(1, int(settings.P2P_MAX_CLIENT_SLOTS_PER_MIN))
         reserved_sessions = max(0, int(route_owner.get("active_sessions", 0)))
-        shared_slots_per_route = max(0, shared_slots_budget // route_total)
-        return max(0, min(shared_slots_per_route, client_slots_budget) - reserved_sessions)
+        effective_budget = max(0, shared_slots_budget - reserved_sessions)
+        if effective_budget <= 0:
+            return [0] * route_total
+        slots = [0] * route_total
+        for index in range(min(effective_budget, route_total)):
+            slots[index] = min(1, client_slots_budget)
+        return slots
 
     def _build_routing_table(
         self,
@@ -264,13 +314,10 @@ class P2PService:
         for owner in owner_rows:
             if owner.get("route_status") != "online" or not owner.get("direct_provider_access"):
                 continue
-            route_pairs = self._build_route_pairs(
-                list(owner.get("providers") or []),
-                list(owner.get("models") or []),
-            )
+            route_pairs = self._build_owner_route_pairs(owner)
             route_count = len(route_pairs) or max(1, len(owner.get("providers") or []))
-            available_slots = self._route_slots_per_minute(owner, route_count)
-            for pair in route_pairs:
+            slot_values = self._route_slot_values(owner, route_count)
+            for index, pair in enumerate(route_pairs):
                 routing_rows.append(
                     {
                         "kind": owner["kind"],
@@ -279,7 +326,7 @@ class P2PService:
                         "provider": pair["provider"],
                         "model": pair["model"],
                         "resource_name": f"{pair['provider']} + {pair['model']}",
-                        "available_slots_per_minute": available_slots,
+                        "available_slots_per_minute": slot_values[index] if index < len(slot_values) else 0,
                         "route_status": owner.get("route_status"),
                         "runtime_status": owner.get("runtime_status"),
                         "direct_provider_access": owner.get("direct_provider_access"),
@@ -970,6 +1017,7 @@ class P2PService:
             for provider_name in master.get("providers") or []:
                 direct_provider_links.add(f"{route_id}::{provider_name}")
 
+        routing_table = self._build_routing_table(masters=masters, peers=peers)
         network_map = {
             "master_nodes": {
                 "count": master_count,
@@ -978,20 +1026,45 @@ class P2PService:
                     for master in masters
                     if master.get("route_status") == "online" and master.get("direct_provider_access")
                 ),
+                "route_count": sum(
+                    1 for row in routing_table if row.get("kind") == "master" and row.get("route_status") == "online"
+                ),
                 "direct_provider_access": local_direct_provider_access,
                 "role": local_role,
             },
             "peer_nodes": {
                 "count": peer_count,
                 "direct_provider_count": peer_provider_count,
+                "route_count": sum(
+                    1 for row in routing_table if row.get("kind") == "peer" and row.get("route_status") == "online"
+                ),
                 "direct_peer_count": direct_peer_count,
                 "link_only_peer_count": link_only_peer_count,
             },
             "routes": {
                 "direct_provider_links": len(direct_provider_links),
+                "online_route_count": sum(1 for row in routing_table if row.get("route_status") == "online"),
             },
         }
-        routing_table = self._build_routing_table(masters=masters, peers=peers)
+        ready_routes = sum(1 for row in routing_table if row.get("route_status") == "online")
+        routes_with_slots = sum(
+            1
+            for row in routing_table
+            if row.get("route_status") == "online" and (row.get("available_slots_per_minute") or 0) > 0
+        )
+        shared_slots_total = int(settings.P2P_MAX_SHARED_SLOTS_PER_MIN)
+        routes_without_free_slots = max(0, ready_routes - routes_with_slots)
+        busy_slots = min(
+            shared_slots_total,
+            max(0, int(self._sessions.active_incoming_sessions) + int(self._sessions.active_outgoing_sessions)),
+        )
+        online_resource_summary = {
+            "ready_routes": ready_routes,
+            "routes_with_slots": routes_with_slots,
+            "routes_without_free_slots": routes_without_free_slots,
+            "shared_slots_total": shared_slots_total,
+            "busy_slots": busy_slots,
+        }
 
         return {
             "status": "ok",
@@ -1041,6 +1114,7 @@ class P2PService:
             "masters": masters,
             "heartbeat": peer_status_summary,
             "network_map": network_map,
+            "online_resource_summary": online_resource_summary,
             "routing": {
                 "rows": routing_table,
                 "total_rows": len(routing_table),

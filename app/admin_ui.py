@@ -1362,10 +1362,15 @@ ADMIN_PAGE_HTML = """<!doctype html>
         hay.includes('llama') ||
         hay.includes('gpt') ||
         hay.includes('gemini') ||
+        hay.includes('gemma') ||
+        hay.includes('glm') ||
         hay.includes('qwen') ||
         hay.includes('deepseek') ||
         hay.includes('claude') ||
         hay.includes('mistral') ||
+        hay.includes('allam') ||
+        hay.includes('minimax') ||
+        hay.includes('compound') ||
         hay.includes('command') ||
         hay.includes('language') ||
         hay.includes('reason') ||
@@ -1554,6 +1559,15 @@ ADMIN_PAGE_HTML = """<!doctype html>
       const responsesReceived = Number(job?.responses_received || 0);
       const requestsPercent = percent(requestsStarted, total);
       const responsesPercent = percent(responsesReceived, total);
+      const startedAt = job?.last_started_at ? Date.parse(job.last_started_at) : NaN;
+      const elapsedSeconds = Number.isNaN(startedAt) ? 0 : Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+      const statusText = job?.running
+        ? `Идет ручная проверка: ${elapsedSeconds} сек`
+        : job?.status === 'completed'
+          ? `Ручная проверка завершена за ${elapsedSeconds} сек`
+          : job?.status === 'failed'
+            ? `Проверка завершилась с ошибкой через ${elapsedSeconds} сек`
+            : 'Статус проверки неизвестен';
 
       if (!job?.running && !job?.last_started_at) {
         validatedLlmState.style.display = 'none';
@@ -1563,25 +1577,25 @@ ADMIN_PAGE_HTML = """<!doctype html>
 
       validatedLlmState.style.display = 'block';
       validatedLlmState.innerHTML = `
-        <div>${t('validatingRemaining')}</div>
-        <div class="progress-stack">
-          <div class="progress-line">
-            <div class="progress-meta">
-              <span>${t('requestsToTest')}</span>
-              <span>${requestsStarted} / ${total} (${requestsPercent}%)</span>
+          <div><strong>${statusText}</strong></div>
+          <div class="progress-stack">
+            <div class="progress-line">
+              <div class="progress-meta">
+                <span>${t('requestsToTest')}</span>
+                <span>${requestsStarted} / ${total} (${requestsPercent}%)</span>
             </div>
             <div class="progress-track"><div class="progress-fill" style="width:${requestsPercent}%"></div></div>
           </div>
-          <div class="progress-line">
-            <div class="progress-meta">
-              <span>${t('receivedResponses')}</span>
-              <span>${responsesReceived} / ${total} (${responsesPercent}%)</span>
+            <div class="progress-line">
+              <div class="progress-meta">
+                <span>${t('receivedResponses')}</span>
+                <span>${responsesReceived} / ${total} (${responsesPercent}%)</span>
+              </div>
+              <div class="progress-track"><div class="progress-fill" style="width:${responsesPercent}%"></div></div>
             </div>
-            <div class="progress-track"><div class="progress-fill" style="width:${responsesPercent}%"></div></div>
+            <div class="sub">${t('status')}: ${fmt(job?.status)}. ${t('successful')}: ${fmt(job?.passed)}. ${t('didNotPass')}: ${fmt(job?.failed)}. Ответов: ${responsesReceived} из ${total}.</div>
           </div>
-          <div class="sub">${t('status')}: ${fmt(job?.status)}. ${t('successful')}: ${fmt(job?.passed)}. ${t('didNotPass')}: ${fmt(job?.failed)}.</div>
-        </div>
-      `;
+        `;
     }
 
     async function getValidatedLlmJobStatus() {
@@ -1613,7 +1627,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
       }
       validatedLlmProgressHandle = setInterval(() => {
         syncValidatedLlmJobStatus({ reloadOnFinish: true });
-      }, 3000);
+      }, 1000);
     }
 
     async function loadValidatedLlmBlock() {
