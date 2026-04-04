@@ -88,6 +88,10 @@ Implemented in MVP:
   - `direct_provider_access=true`
   - `link-only` peers that only reference another node
 - network map summary
+- route hashing:
+  - `route_id = sha256(api_key + provider + model)[:12]`
+- route TTL cleanup:
+  - non-working routes expire after `P2P_ROUTE_TTL_MIN`
 - dispatch preview with capability/health filtering
 - P2P event logs with `p2p_...` prefix
 
@@ -97,6 +101,12 @@ Current route-capacity semantics:
 - master routes are counted only when the master has local provider access
 - peer routes are counted only for online peers with `direct_provider_access=true`
 - link-only peers are shown in admin for topology/debug, but they do not increase route capacity
+- `Network Map` now shows:
+  - unique route count
+  - redundant route count by duplicate route hash
+- `Маршрутизация` now uses `Route ID` as the primary route identifier
+- route slots are calculated with:
+  - `ceil(P2P_MAX_SHARED_SLOTS_PER_MIN / resources_in_node)`
 
 Current P2P admin page highlights:
 

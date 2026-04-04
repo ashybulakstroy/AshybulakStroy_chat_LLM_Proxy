@@ -70,6 +70,7 @@ class Settings:
     P2P_GLOBAL_OUTGOING_RPM_LIMIT: int = int(os.getenv("P2P_GLOBAL_OUTGOING_RPM_LIMIT", "60"))
     P2P_HEARTBEAT_INTERVAL_SEC: int = int(os.getenv("P2P_HEARTBEAT_INTERVAL_SEC", "15"))
     P2P_PEER_STALE_AFTER_SEC: int = int(os.getenv("P2P_PEER_STALE_AFTER_SEC", "45"))
+    P2P_ROUTE_TTL_MIN: int = int(os.getenv("P2P_ROUTE_TTL_MIN", "1440"))
 
     def get_provider_configs(self) -> Dict[str, ProviderConfig]:
         configs = {

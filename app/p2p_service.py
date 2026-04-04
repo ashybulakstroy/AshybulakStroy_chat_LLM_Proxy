@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
+import math
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -72,6 +74,10 @@ class P2PService:
     def _local_provider_names(self) -> list[str]:
         return list(settings.get_provider_configs().keys())
 
+    def _provider_api_key(self, provider_name: str) -> str:
+        config = settings.get_provider_configs().get(str(provider_name or "").strip().lower())
+        return str(config.api_key if config else "").strip()
+
     def _local_direct_provider_access(self, node_mode: str | None = None) -> bool:
         effective_mode = str(node_mode or self._runtime_node_mode).strip().lower()
         return bool(self._local_provider_names()) and effective_mode != "master_cache"
@@ -84,6 +90,66 @@ class P2PService:
         if not raw:
             return []
         return [item.strip() for item in raw.split(",") if item.strip()]
+
+    def _parse_json_list(self, value: str | None) -> list[dict[str, Any]]:
+        raw = str(value or "").strip()
+        if not raw:
+            return []
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+
+    def _route_hash_id(self, *, api_key: str, provider: str, model: str) -> str:
+        seed = f"{api_key.strip()}|{provider.strip().lower()}|{model.strip()}"
+        return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+
+    def _route_ttl_delta(self) -> timedelta:
+        return timedelta(minutes=max(1, int(settings.P2P_ROUTE_TTL_MIN)))
+
+    def _is_route_expired(self, route: dict[str, Any]) -> bool:
+        route_status = str(route.get("route_status") or "").strip().lower()
+        if route_status == "online":
+            return False
+        last_seen_raw = str(route.get("last_heartbeat_at") or route.get("created_at") or "").strip()
+        if not last_seen_raw:
+            return True
+        try:
+            last_seen = datetime.fromisoformat(last_seen_raw)
+        except ValueError:
+            return True
+        return self._now() - last_seen > self._route_ttl_delta()
+
+    def _prune_expired_routes(self) -> int:
+        removed = 0
+        local_master_route_id = self._route_id_from_url(self._local_base_url(), "master")
+        with self._lock:
+            peer_keys_to_remove = [
+                peer_id
+                for peer_id, peer in self._known_peers.items()
+                if self._is_route_expired(peer)
+            ]
+            master_keys_to_remove = [
+                route_id
+                for route_id, master in self._known_masters.items()
+                if route_id != local_master_route_id and self._is_route_expired(master)
+            ]
+            for peer_id in peer_keys_to_remove:
+                self._known_peers.pop(peer_id, None)
+                removed += 1
+            for route_id in master_keys_to_remove:
+                self._known_masters.pop(route_id, None)
+                removed += 1
+        if removed:
+            self._logger.info(
+                "p2p_routes_pruned removed=%s ttl_min=%s",
+                removed,
+                settings.P2P_ROUTE_TTL_MIN,
+            )
+        return removed
 
     def _load_local_admin_cache(self) -> dict[str, Any]:
         if not ADMIN_CACHE_FILE.exists():
@@ -146,6 +212,7 @@ class P2PService:
         normalized["supports_embeddings"] = self._to_bool(peer.get("supports_embeddings"), True)
         normalized["providers"] = list(peer.get("providers") or [])
         normalized["models"] = list(peer.get("models") or [])
+        normalized["route_catalog"] = list(peer.get("route_catalog") or [])
         normalized["shared_rpm_ratio"] = self._safe_ratio(peer.get("shared_rpm_ratio", 1.0))
         normalized["shared_tpm_ratio"] = self._safe_ratio(peer.get("shared_tpm_ratio", 1.0))
         normalized["active_sessions"] = max(0, int(peer.get("active_sessions", 0)))
@@ -222,17 +289,17 @@ class P2PService:
         if not clean_providers:
             return []
         if not clean_models:
-            return [{"provider": provider, "model": "auto"} for provider in clean_providers]
+            return [{"provider": provider, "model": "auto", "route_id": ""} for provider in clean_providers]
         if len(clean_providers) == 1:
-            return [{"provider": clean_providers[0], "model": model} for model in clean_models]
+            return [{"provider": clean_providers[0], "model": model, "route_id": ""} for model in clean_models]
         if len(clean_models) == 1:
-            return [{"provider": provider, "model": clean_models[0]} for provider in clean_providers]
+            return [{"provider": provider, "model": clean_models[0], "route_id": ""} for provider in clean_providers]
         if len(clean_providers) == len(clean_models):
             return [
-                {"provider": provider, "model": model}
+                {"provider": provider, "model": model, "route_id": ""}
                 for provider, model in zip(clean_providers, clean_models)
             ]
-        return [{"provider": provider, "model": "auto"} for provider in clean_providers]
+        return [{"provider": provider, "model": "auto", "route_id": ""} for provider in clean_providers]
 
     def _local_llm_route_pairs(self) -> list[dict[str, str]]:
         cache = self._load_local_admin_cache()
@@ -242,11 +309,16 @@ class P2PService:
                 {
                     "provider": str(item.get("provider") or "").strip(),
                     "model": str(item.get("id") or "").strip(),
+                    "route_id": self._route_hash_id(
+                        api_key=self._provider_api_key(str(item.get("provider") or "").strip()),
+                        provider=str(item.get("provider") or "").strip(),
+                        model=str(item.get("id") or "").strip(),
+                    ),
                 }
                 for item in validated
                 if isinstance(item, dict) and item.get("provider") and item.get("id")
             ]
-            return [item for item in routes if item["provider"] and item["model"]]
+            return [item for item in routes if item["provider"] and item["model"] and item["route_id"]]
 
         block_two = ((cache.get("block_two") or {}).get("data") or [])
         routes = []
@@ -257,7 +329,17 @@ class P2PService:
             model_id = str(item.get("id") or "").strip()
             category = str(item.get("category") or "").strip().lower()
             if provider and model_id and category == "llm":
-                routes.append({"provider": provider, "model": model_id})
+                routes.append(
+                    {
+                        "provider": provider,
+                        "model": model_id,
+                        "route_id": self._route_hash_id(
+                            api_key=self._provider_api_key(provider),
+                            provider=provider,
+                            model=model_id,
+                        ),
+                    }
+                )
         return routes
 
     def _build_owner_route_pairs(self, owner: dict[str, Any]) -> list[dict[str, str]]:
@@ -265,6 +347,19 @@ class P2PService:
             local_routes = self._local_llm_route_pairs()
             if local_routes:
                 return local_routes
+        route_catalog = list(owner.get("route_catalog") or [])
+        if route_catalog:
+            return [
+                {
+                    "provider": str(item.get("provider") or "").strip(),
+                    "model": str(item.get("model") or "").strip(),
+                    "route_id": str(item.get("route_id") or "").strip(),
+                }
+                for item in route_catalog
+                if str(item.get("provider") or "").strip()
+                and str(item.get("model") or "").strip()
+                and str(item.get("route_id") or "").strip()
+            ]
         return self._build_route_pairs(
             list(owner.get("providers") or []),
             list(owner.get("models") or []),
@@ -273,16 +368,9 @@ class P2PService:
     def _route_slot_values(self, route_owner: dict[str, Any], route_count: int) -> list[int]:
         route_total = max(1, route_count)
         shared_ratio = self._safe_ratio(route_owner.get("shared_rpm_ratio", 1.0))
-        shared_slots_budget = max(1, int(settings.P2P_MAX_SHARED_SLOTS_PER_MIN * shared_ratio))
-        client_slots_budget = max(1, int(settings.P2P_MAX_CLIENT_SLOTS_PER_MIN))
-        reserved_sessions = max(0, int(route_owner.get("active_sessions", 0)))
-        effective_budget = max(0, shared_slots_budget - reserved_sessions)
-        if effective_budget <= 0:
-            return [0] * route_total
-        slots = [0] * route_total
-        for index in range(min(effective_budget, route_total)):
-            slots[index] = min(1, client_slots_budget)
-        return slots
+        shared_slots_budget = max(0, round(settings.P2P_MAX_SHARED_SLOTS_PER_MIN * shared_ratio))
+        slots_per_route = max(0, math.ceil(shared_slots_budget / route_total))
+        return [slots_per_route] * route_total
 
     def _build_routing_table(
         self,
@@ -318,13 +406,18 @@ class P2PService:
             route_count = len(route_pairs) or max(1, len(owner.get("providers") or []))
             slot_values = self._route_slot_values(owner, route_count)
             for index, pair in enumerate(route_pairs):
+                route_id = str(pair.get("route_id") or "").strip()
+                if not route_id:
+                    fallback_seed = str(owner.get("owner_id") or owner.get("base_url") or owner.get("owner_name") or "")
+                    route_id = hashlib.sha256(
+                        f"{fallback_seed}|{pair['provider']}|{pair['model']}".encode("utf-8")
+                    ).hexdigest()[:12]
                 routing_rows.append(
                     {
                         "kind": owner["kind"],
                         "owner_id": owner["owner_id"],
                         "owner_name": owner["owner_name"],
-                        "provider": pair["provider"],
-                        "model": pair["model"],
+                        "route_id": route_id,
                         "resource_name": f"{pair['provider']} + {pair['model']}",
                         "available_slots_per_minute": slot_values[index] if index < len(slot_values) else 0,
                         "route_status": owner.get("route_status"),
@@ -335,8 +428,7 @@ class P2PService:
         routing_rows.sort(
             key=lambda item: (
                 item.get("owner_name") or "",
-                item.get("provider") or "",
-                item.get("model") or "",
+                item.get("route_id") or "",
             )
         )
         return routing_rows
@@ -460,6 +552,7 @@ class P2PService:
         if self._runtime_node_mode not in {"master", "master_cache"}:
             return
         route_id = self._route_id_from_url(self._local_base_url(), "master")
+        local_routes = self._local_llm_route_pairs()
         with self._lock:
             existing = self._known_masters.get(route_id, {})
             self._known_masters[route_id] = {
@@ -471,7 +564,8 @@ class P2PService:
                 "status": "online",
                 "route_status": "online",
                 "providers": self._local_provider_names(),
-                "models": list(existing.get("models") or []),
+                "models": sorted({item.get("model") for item in local_routes if item.get("model")}),
+                "route_catalog": local_routes,
                 "direct_provider_access": self._local_direct_provider_access(),
                 "accept_remote_tasks": settings.P2P_ACCEPT_REMOTE_TASKS,
                 "share_capacity": settings.P2P_SHARE_CAPACITY,
@@ -501,6 +595,7 @@ class P2PService:
                 "route_status": existing.get("route_status") or "cache",
                 "providers": list(existing.get("providers") or []),
                 "models": list(existing.get("models") or []),
+                "route_catalog": list(existing.get("route_catalog") or []),
                 "direct_provider_access": self._to_bool(existing.get("direct_provider_access"), True),
                 "accept_remote_tasks": True,
                 "share_capacity": True,
@@ -511,6 +606,7 @@ class P2PService:
                 "last_error": existing.get("last_error"),
                 "created_at": existing.get("created_at") or self._now().isoformat(),
                 "last_heartbeat_at": existing.get("last_heartbeat_at"),
+                "route_catalog": list(existing.get("route_catalog") or []),
             }
 
     def _network_changed(self, before: dict[str, Any], after: dict[str, Any]) -> bool:
@@ -521,6 +617,7 @@ class P2PService:
             "node_mode",
             "direct_provider_access",
             "providers",
+            "route_catalog",
             "health_score",
             "last_error",
         )
@@ -543,6 +640,7 @@ class P2PService:
         supports_embeddings: bool = True,
         providers: str | None = None,
         models: str | None = None,
+        route_catalog: str | None = None,
         health_score: float | None = None,
         active_sessions: int = 0,
         last_error: str = "",
@@ -571,6 +669,7 @@ class P2PService:
                 "supports_embeddings": bool(supports_embeddings),
                 "providers": self._parse_csv_list(providers),
                 "models": self._parse_csv_list(models),
+                "route_catalog": self._parse_json_list(route_catalog),
                 "health_score": self._safe_health(health_score if health_score is not None else existing.get("health_score", 1.0)),
                 "active_sessions": max(0, int(active_sessions)),
                 "last_error": str(last_error).strip() or None,
@@ -839,6 +938,7 @@ class P2PService:
 
         providers = self._local_provider_names()
         direct_provider_access = self._local_direct_provider_access()
+        local_routes = self._local_llm_route_pairs()
         payload = {
             "peer_id": self._local_peer_id(),
             "node_name": settings.P2P_NODE_NAME,
@@ -852,7 +952,8 @@ class P2PService:
             "supports_chat": True,
             "supports_embeddings": True,
             "providers": ",".join(providers),
-            "models": "",
+            "models": ",".join(sorted({item["model"] for item in local_routes if item.get("model")})),
+            "route_catalog": json.dumps(local_routes, ensure_ascii=False),
             "shared_rpm_ratio": self._safe_ratio(settings.P2P_SHARED_RPM_RATIO),
             "shared_tpm_ratio": self._safe_ratio(settings.P2P_SHARED_TPM_RATIO),
         }
@@ -990,6 +1091,9 @@ class P2PService:
         }
 
     def get_status(self) -> dict[str, Any]:
+        pruned_count = self._prune_expired_routes()
+        if pruned_count:
+            self.save_network_snapshot()
         self._ensure_local_master_record()
         self.ensure_master_route_from_config()
         with self._lock:
@@ -1054,6 +1158,9 @@ class P2PService:
                 direct_provider_links.add(f"{route_id}::{provider_name}")
 
         routing_table = self._build_routing_table(masters=masters, peers=peers)
+        route_ids = [str(row.get("route_id") or "").strip() for row in routing_table if str(row.get("route_id") or "").strip()]
+        unique_route_ids = set(route_ids)
+        redundant_route_count = max(0, len(route_ids) - len(unique_route_ids))
         network_map = {
             "master_nodes": {
                 "count": master_count,
@@ -1080,6 +1187,8 @@ class P2PService:
             "routes": {
                 "direct_provider_links": len(direct_provider_links),
                 "online_route_count": sum(1 for row in routing_table if row.get("route_status") == "online"),
+                "unique_route_count": len(unique_route_ids),
+                "redundant_route_count": redundant_route_count,
             },
         }
         ready_routes = sum(1 for row in routing_table if row.get("route_status") == "online")
@@ -1130,6 +1239,7 @@ class P2PService:
                 "cluster_name": settings.P2P_CLUSTER_NAME,
                 "known_peers_count": len(peers),
                 "network_snapshot_file": str(self._network_file),
+                "route_ttl_min": settings.P2P_ROUTE_TTL_MIN,
             },
             "limits": {
                 "max_client_slots_per_min": settings.P2P_MAX_CLIENT_SLOTS_PER_MIN,

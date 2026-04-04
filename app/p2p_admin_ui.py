@@ -1,4 +1,4 @@
-P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
+﻿P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -266,15 +266,14 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
           <tr>
             <th>Kind</th>
             <th>Node</th>
-            <th>Provider</th>
-            <th>Model</th>
+            <th>Route ID</th>
             <th>Resource</th>
             <th>Slots / Min</th>
             <th>Route Status</th>
           </tr>
         </thead>
         <tbody id="routing-table">
-          <tr><td colspan="7">No routing resources yet.</td></tr>
+          <tr><td colspan="6">No routing resources yet.</td></tr>
         </tbody>
       </table>
     </section>
@@ -451,9 +450,9 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
     function formatPeerKey(value) {
       const text = String(value || "");
       return text
-        .replaceAll("::", "::​")
-        .replaceAll("://", "://​")
-        .replaceAll("/", "/​");
+        .replaceAll("::", "::вЂ‹")
+        .replaceAll("://", "://вЂ‹")
+        .replaceAll("/", "/вЂ‹");
     }
 
     function formatCapabilities(peer) {
@@ -481,7 +480,7 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         ...peerRows.map((item) => ({ kind: "peer", row_id: item.peer_id || "", ...item })),
       ];
       if (title) {
-        title.textContent = `Known Peers (${rows.length})`;
+        title.textContent = `Маршрутизация (${rows.length})`;
       }
       if (rows.length === 0) {
         tbody.innerHTML = '<tr><td colspan="15">No peers discovered yet.</td></tr>';
@@ -518,15 +517,14 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
         title.textContent = `Маршрутизация (${rows.length})`;
       }
       if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7">No routing resources yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6">No routing resources yet.</td></tr>';
         return;
       }
       tbody.innerHTML = rows.map((row) => `
         <tr>
           <td>${row.kind || ""}</td>
           <td>${row.owner_name || ""}</td>
-          <td>${row.provider || ""}</td>
-          <td>${row.model || ""}</td>
+          <td class="mono-wrap">${row.route_id || ""}</td>
           <td>${row.resource_name || ""}</td>
           <td>${row.available_slots_per_minute ?? 0}</td>
           <td>${row.route_status || ""}</td>
@@ -561,6 +559,20 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
           providers: "-",
           routes: networkMap.routes?.online_route_count ?? 0,
           notes: "only node/provider links with direct provider access"
+        },
+        {
+          segment: "Unique Routes",
+          count: networkMap.routes?.unique_route_count ?? 0,
+          providers: "-",
+          routes: networkMap.routes?.unique_route_count ?? 0,
+          notes: "unique routes by 12-char hash"
+        },
+        {
+          segment: "Redundant Routes",
+          count: networkMap.routes?.redundant_route_count ?? 0,
+          providers: "-",
+          routes: networkMap.routes?.redundant_route_count ?? 0,
+          notes: "duplicates by route hash"
         }
       ];
       tbody.innerHTML = rows.map((row) => `
@@ -669,3 +681,5 @@ P2P_ADMIN_PAGE_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+

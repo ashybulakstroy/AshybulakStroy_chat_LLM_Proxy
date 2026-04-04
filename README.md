@@ -153,6 +153,8 @@ Current MVP scope:
   - peer direct provider links count
   - direct peers vs link-only peers
   - direct provider links across the network
+  - unique routes by 12-char hash
+  - redundant routes by duplicate hash
 - P2P logs with `p2p_...` prefixes
 
 Direct route capacity rules:
@@ -179,7 +181,11 @@ Slot-based sharing limits:
 
 - `P2P_MAX_CLIENT_SLOTS_PER_MIN=1` limits how many LLM slot units one client may consume per minute on a node
 - `P2P_MAX_SHARED_SLOTS_PER_MIN=5` limits how many slot units the node is willing to share with the whole P2P network per minute
-- routing capacity in the P2P admin uses these slot limits for the current MVP
+- `P2P_ROUTE_TTL_MIN=1440` defines how long a non-working route may stay in memory/snapshot before it is cleared
+- every direct route now gets `route_id = sha256(api_key + provider + model)[:12]`
+- `Маршрутизация` shows `Route ID` and `Resource`
+- route slots are now calculated as:
+  - `ceil(P2P_MAX_SHARED_SLOTS_PER_MIN / resources_in_node)`
 
 Main endpoints:
 
