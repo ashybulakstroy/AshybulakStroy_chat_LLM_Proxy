@@ -107,6 +107,12 @@ class P2PService:
         seed = f"{api_key.strip()}|{provider.strip().lower()}|{model.strip()}"
         return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
 
+    def _url_hash_id(self, value: str, length: int = 6) -> str:
+        raw = str(value or "").strip().rstrip("/")
+        if not raw:
+            return ""
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[: max(1, length)]
+
     def _route_ttl_delta(self) -> timedelta:
         return timedelta(minutes=max(1, int(settings.P2P_ROUTE_TTL_MIN)))
 
@@ -382,7 +388,7 @@ class P2PService:
         owner_rows = [
             *[
                 {
-                    "kind": "master",
+                    "mode": "master",
                     "owner_id": master.get("route_id") or master.get("base_url") or "master",
                     "owner_name": master.get("node_name") or "master",
                     **master,
@@ -391,7 +397,7 @@ class P2PService:
             ],
             *[
                 {
-                    "kind": "peer",
+                    "mode": "peer",
                     "owner_id": peer.get("peer_id") or peer.get("node_name") or "peer",
                     "owner_name": peer.get("node_name") or peer.get("peer_id") or "peer",
                     **peer,
@@ -414,7 +420,7 @@ class P2PService:
                     ).hexdigest()[:12]
                 routing_rows.append(
                     {
-                        "kind": owner["kind"],
+                        "mode": owner["mode"],
                         "owner_id": owner["owner_id"],
                         "owner_name": owner["owner_name"],
                         "route_id": route_id,
@@ -701,17 +707,17 @@ class P2PService:
             self.save_network_snapshot()
         return dict(peer)
 
-    def remove_known_node(self, *, kind: str, node_key: str) -> dict[str, Any]:
-        normalized_kind = str(kind or "").strip().lower()
+    def remove_known_node(self, *, mode: str, node_key: str) -> dict[str, Any]:
+        normalized_mode = str(mode or "").strip().lower()
         normalized_key = str(node_key or "").strip()
-        if normalized_kind not in {"peer", "master"}:
-            raise ValueError("kind must be 'peer' or 'master'")
+        if normalized_mode not in {"peer", "master"}:
+            raise ValueError("mode must be 'peer' or 'master'")
         if not normalized_key:
             raise ValueError("node_key is required")
 
         removed: dict[str, Any] | None = None
         with self._lock:
-            if normalized_kind == "peer":
+            if normalized_mode == "peer":
                 removed = self._known_peers.pop(normalized_key, None)
             else:
                 local_master_route_id = self._route_id_from_url(self._local_base_url(), "master")
@@ -723,8 +729,8 @@ class P2PService:
             raise ValueError(f"{normalized_kind} node '{normalized_key}' not found")
 
         self._logger.info(
-            "p2p_node_removed kind=%s node_key=%s node_name=%s base_url=%s",
-            normalized_kind,
+            "p2p_node_removed mode=%s node_key=%s node_name=%s base_url=%s",
+            normalized_mode,
             normalized_key,
             removed.get("node_name"),
             removed.get("base_url"),
@@ -732,7 +738,7 @@ class P2PService:
         self.save_network_snapshot()
         return {
             "status": "ok",
-            "removed_kind": normalized_kind,
+            "removed_mode": normalized_mode,
             "removed_key": normalized_key,
             "removed_node_name": removed.get("node_name"),
         }
@@ -985,7 +991,7 @@ class P2PService:
         validated = 0
         failed = 0
 
-        async def _validate_entry(kind: str, route_key: str, route: dict[str, Any]) -> None:
+        async def _validate_entry(mode: str, route_key: str, route: dict[str, Any]) -> None:
             nonlocal changes, validated, failed
             base_url = str(route.get("base_url") or "").strip().rstrip("/")
             before = dict(route)
@@ -1014,7 +1020,7 @@ class P2PService:
                 route["status"] = "error"
                 route["last_error"] = str(exc)
                 failed += 1
-                self._logger.warning("p2p_route_validation_failed kind=%s route_key=%s error=%s", kind, route_key, str(exc))
+                self._logger.warning("p2p_route_validation_failed mode=%s route_key=%s error=%s", mode, route_key, str(exc))
             if self._network_changed(before, route):
                 changes += 1
 
@@ -1105,6 +1111,12 @@ class P2PService:
 
         peers.sort(key=lambda item: (item.get("node_name") or "", item.get("peer_id") or ""))
         masters.sort(key=lambda item: (item.get("base_url") or "", item.get("route_id") or ""))
+        for peer in peers:
+            peer["peer_id6"] = self._url_hash_id(peer.get("base_url") or peer.get("peer_id") or "")
+            peer["mode"] = "peer"
+        for master in masters:
+            master["peer_id6"] = self._url_hash_id(master.get("base_url") or master.get("route_id") or "")
+            master["mode"] = "master"
         peer_status_summary = {
             "total_known_peers": len(peers),
             "online": sum(1 for peer in peers if self._peer_status(peer) == "online"),
@@ -1170,7 +1182,7 @@ class P2PService:
                     if master.get("route_status") == "online" and master.get("direct_provider_access")
                 ),
                 "route_count": sum(
-                    1 for row in routing_table if row.get("kind") == "master" and row.get("route_status") == "online"
+                    1 for row in routing_table if row.get("mode") == "master" and row.get("route_status") == "online"
                 ),
                 "direct_provider_access": local_direct_provider_access,
                 "role": local_role,
@@ -1179,7 +1191,7 @@ class P2PService:
                 "count": peer_count,
                 "direct_provider_count": peer_provider_count,
                 "route_count": sum(
-                    1 for row in routing_table if row.get("kind") == "peer" and row.get("route_status") == "online"
+                    1 for row in routing_table if row.get("mode") == "peer" and row.get("route_status") == "online"
                 ),
                 "direct_peer_count": direct_peer_count,
                 "link_only_peer_count": link_only_peer_count,

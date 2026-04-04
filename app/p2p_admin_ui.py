@@ -239,7 +239,7 @@
                 <th>Mode</th>
               <th>Peer ID</th>
             <th>Name</th>
-            <th>Mode</th>
+            <th>Node Mode</th>
             <th>Scope</th>
               <th>Run</th>
             <th>Route Status</th>
@@ -264,7 +264,7 @@
       <table>
         <thead>
           <tr>
-            <th>Kind</th>
+            <th>Mode</th>
             <th>Node</th>
             <th>Route ID</th>
             <th>Resource</th>
@@ -476,11 +476,11 @@
       const peerRows = Array.isArray(peers) ? peers : [];
       const masterRows = Array.isArray(masters) ? masters : [];
       const rows = [
-        ...masterRows.map((item) => ({ kind: "master", row_id: item.route_id || item.base_url || "", ...item })),
-        ...peerRows.map((item) => ({ kind: "peer", row_id: item.peer_id || "", ...item })),
+        ...masterRows.map((item) => ({ mode: "master", row_id: item.route_id || item.base_url || "", ...item })),
+        ...peerRows.map((item) => ({ mode: "peer", row_id: item.peer_id || "", ...item })),
       ];
       if (title) {
-        title.textContent = `Маршрутизация (${rows.length})`;
+        title.textContent = `Known Peers (${rows.length})`;
       }
       if (rows.length === 0) {
         tbody.innerHTML = '<tr><td colspan="15">No peers discovered yet.</td></tr>';
@@ -488,8 +488,8 @@
       }
           tbody.innerHTML = rows.map((peer) => `
             <tr${Number(peer.health_score ?? "") === 0 ? ' style="background:#fff1f2;"' : ""}>
-              <td>${peer.kind || ""}</td>
-              <td class="mono-wrap">${formatPeerKey(peer.peer_id || peer.route_id || "")}</td>
+              <td>${peer.mode || ""}</td>
+              <td class="mono-wrap">${peer.peer_id6 || ""}</td>
               <td>${peer.node_name || ""}</td>
             <td>${peer.node_mode || ""}</td>
             <td>${peer.scope || ""}</td>
@@ -503,7 +503,7 @@
                 <td>${formatHeartbeatAge(peer.last_heartbeat_at)}</td>
                 <td class="mono-wrap">${formatPeerKey(peer.base_url || "")}</td>
                 <td>${(String(peer.runtime_status || peer.status || "").toLowerCase() === "error" && Number(peer.health_score ?? "") === 0)
-                ? `<button class="secondary table-action" data-remove-kind="${peer.kind || ""}" data-remove-key="${peer.peer_id || peer.route_id || ""}">X</button>`
+                ? `<button class="secondary table-action" data-remove-mode="${peer.mode || ""}" data-remove-key="${peer.peer_id || peer.route_id || ""}">X</button>`
                 : ""}</td>
             </tr>
           `).join("");
@@ -522,7 +522,7 @@
       }
       tbody.innerHTML = rows.map((row) => `
         <tr>
-          <td>${row.kind || ""}</td>
+          <td>${row.mode || ""}</td>
           <td>${row.owner_name || ""}</td>
           <td class="mono-wrap">${row.route_id || ""}</td>
           <td>${row.resource_name || ""}</td>
@@ -665,12 +665,12 @@
       });
 
       document.getElementById("peer-table").addEventListener("click", async (event) => {
-        const button = event.target.closest("[data-remove-kind][data-remove-key]");
+        const button = event.target.closest("[data-remove-mode][data-remove-key]");
         if (!button) {
           return;
         }
         await postForm("/admin/p2p/nodes/remove", {
-          kind: button.dataset.removeKind,
+          mode: button.dataset.removeMode,
           node_key: button.dataset.removeKey
         });
         await loadStatus();

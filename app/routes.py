@@ -1039,11 +1039,12 @@ async def update_p2p_session_counters(
 
 @router.post("/admin/p2p/nodes/remove", tags=["Admin"])
 async def remove_p2p_node(
-    kind: str = Query(...),
+    mode: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
     node_key: str = Query(...),
 ) -> dict:
     try:
-        return p2p_service.remove_known_node(kind=kind, node_key=node_key)
+        return p2p_service.remove_known_node(mode=(mode or kind or ""), node_key=node_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
