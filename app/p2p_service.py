@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.rate_limits import rate_limit_store
 
 
 VALID_NODE_MODES = {"peer", "auto", "master_cache", "master"}
@@ -165,6 +166,47 @@ class P2PService:
         except (OSError, json.JSONDecodeError):
             return {}
 
+    def _local_invalid_route_ids(self) -> set[str]:
+        cache = self._load_local_admin_cache()
+        items = ((cache.get("invalid_resources") or {}).get("data") or [])
+        return {
+            str(item.get("route_id") or "").strip()
+            for item in items
+            if isinstance(item, dict) and str(item.get("route_id") or "").strip()
+        }
+
+    def _local_quarantined_providers(self) -> set[str]:
+        providers = rate_limit_store.get_snapshot(self._local_provider_names()).values()
+        return {
+            str(item.get("provider") or "").strip()
+            for item in providers
+            if isinstance(item, dict) and ((item.get("quarantine") or {}).get("active"))
+        }
+
+    def resolve_local_route_id(self, provider: str, model: str) -> str:
+        clean_provider = str(provider or "").strip()
+        clean_model = str(model or "").strip()
+        if not clean_provider or not clean_model:
+            return ""
+        return self._route_hash_id(
+            api_key=self._provider_api_key(clean_provider),
+            provider=clean_provider,
+            model=clean_model,
+        )
+
+    def _filter_local_route_pairs(self, routes: list[dict[str, str]]) -> list[dict[str, str]]:
+        invalid_route_ids = self._local_invalid_route_ids()
+        quarantined_providers = self._local_quarantined_providers()
+        return [
+            route
+            for route in routes
+            if str(route.get("provider") or "").strip()
+            and str(route.get("model") or "").strip()
+            and str(route.get("route_id") or "").strip()
+            and str(route.get("provider") or "").strip() not in quarantined_providers
+            and str(route.get("route_id") or "").strip() not in invalid_route_ids
+        ]
+
     def _to_bool(self, value: Any, default: bool = False) -> bool:
         if isinstance(value, bool):
             return value
@@ -309,44 +351,47 @@ class P2PService:
 
     def _local_llm_route_pairs(self) -> list[dict[str, str]]:
         cache = self._load_local_admin_cache()
-        validated = ((cache.get("validated_llm") or {}).get("data") or [])
-        if validated:
-            routes = [
-                {
-                    "provider": str(item.get("provider") or "").strip(),
-                    "model": str(item.get("id") or "").strip(),
-                    "route_id": self._route_hash_id(
-                        api_key=self._provider_api_key(str(item.get("provider") or "").strip()),
-                        provider=str(item.get("provider") or "").strip(),
-                        model=str(item.get("id") or "").strip(),
-                    ),
-                }
-                for item in validated
-                if isinstance(item, dict) and item.get("provider") and item.get("id")
-            ]
-            return [item for item in routes if item["provider"] and item["model"] and item["route_id"]]
-
-        block_two = ((cache.get("block_two") or {}).get("data") or [])
-        routes = []
-        for item in block_two:
+        combined = [
+            *(((cache.get("validated_llm") or {}).get("data") or [])),
+            *(((cache.get("block_two") or {}).get("data") or [])),
+        ]
+        routes: list[dict[str, str]] = []
+        seen_route_ids: set[str] = set()
+        for item in combined:
             if not isinstance(item, dict):
                 continue
             provider = str(item.get("provider") or "").strip()
             model_id = str(item.get("id") or "").strip()
             category = str(item.get("category") or "").strip().lower()
-            if provider and model_id and category == "llm":
-                routes.append(
-                    {
-                        "provider": provider,
-                        "model": model_id,
-                        "route_id": self._route_hash_id(
-                            api_key=self._provider_api_key(provider),
-                            provider=provider,
-                            model=model_id,
-                        ),
-                    }
-                )
-        return routes
+            if not (provider and model_id):
+                continue
+            if category and category != "llm":
+                continue
+            route_id = self._route_hash_id(
+                api_key=self._provider_api_key(provider),
+                provider=provider,
+                model=model_id,
+            )
+            if route_id in seen_route_ids:
+                continue
+            seen_route_ids.add(route_id)
+            routes.append(
+                {
+                    "provider": provider,
+                    "model": model_id,
+                    "route_id": route_id,
+                }
+            )
+        return self._filter_local_route_pairs(routes)
+
+    async def sync_local_route_catalog(self, *, reason: str = "manual") -> dict[str, Any]:
+        self.save_network_snapshot()
+        heartbeat = await self.send_local_heartbeat(reason=reason)
+        return {
+            "status": "ok",
+            "reason": reason,
+            "heartbeat": heartbeat,
+        }
 
     def _build_owner_route_pairs(self, owner: dict[str, Any]) -> list[dict[str, str]]:
         if owner.get("kind") == "master" and str(owner.get("base_url") or "").rstrip("/") == self._local_base_url().rstrip("/"):

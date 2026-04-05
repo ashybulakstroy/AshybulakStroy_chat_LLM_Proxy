@@ -358,6 +358,12 @@ ADMIN_PAGE_HTML = """<!doctype html>
       <div class="label">История прокси-сессий</div>
       <div id="proxySessionHistory" class="table-wrap"><div class="empty">Пока нет завершённых сессий</div></div>
     </section>
+
+    <section class="panel">
+      <div class="label">Блок №6</div>
+      <div class="label">Invalid resources</div>
+      <div id="invalidResources" class="table-wrap"><div class="empty">Список invalid resources пока пуст</div></div>
+    </section>
   </div>
 
   <script>
@@ -372,6 +378,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
     const applyProxyModeButton = document.getElementById('applyProxyMode');
     const activeProxySessionsNode = document.getElementById('activeProxySessions');
     const proxySessionHistoryNode = document.getElementById('proxySessionHistory');
+    const invalidResourcesNode = document.getElementById('invalidResources');
     let autoRefreshHandle = null;
     let validatedLlmProgressHandle = null;
     const trendStorageKey = 'ashybulak_admin_trends_v1';
@@ -405,6 +412,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
         validateRemaining: 'Проверить оставшиеся LLM',
         block5: 'Блок №5',
         proxyHistory: 'История прокси-сессий',
+        block6: 'Блок №6',
+        invalidResources: 'Invalid resources',
+        invalidResourcesEmpty: 'Список invalid resources пока пуст',
+        resource: 'Ресурс',
+        reason: 'Причина',
+        arrestedAt: 'Дата ареста',
+        invalidUntil: 'Действует до',
         service: 'Сервис',
         providers: 'Провайдеры',
         models: 'Модели',
@@ -666,6 +680,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
         validateRemaining: 'Validate remaining LLMs',
         block5: 'Block #5',
         proxyHistory: 'Proxy session history',
+        block6: 'Block #6',
+        invalidResources: 'Invalid resources',
+        invalidResourcesEmpty: 'No invalid resources yet',
+        resource: 'Resource',
+        reason: 'Reason',
+        arrestedAt: 'Arrested at',
+        invalidUntil: 'Invalid until',
         service: 'Service',
         providers: 'Providers',
         models: 'Models',
@@ -753,6 +774,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
         validateRemaining: 'Validate remaining LLMs',
         block5: 'Block #5',
         proxyHistory: 'Proxy session history',
+        block6: 'Block #6',
+        invalidResources: 'Invalid resources',
+        invalidResourcesEmpty: 'No invalid resources yet',
+        resource: 'Resource',
+        reason: 'Reason',
+        arrestedAt: 'Arrested at',
+        invalidUntil: 'Invalid until',
         service: 'Service',
         providers: 'Providers',
         models: 'Models',
@@ -1000,6 +1028,8 @@ ADMIN_PAGE_HTML = """<!doctype html>
       if (panelLabels[8]) panelLabels[8].textContent = t('validatedLlm');
       if (panelLabels[9]) panelLabels[9].textContent = t('block5');
       if (panelLabels[10]) panelLabels[10].textContent = t('proxyHistory');
+      if (panelLabels[11]) panelLabels[11].textContent = t('block6');
+      if (panelLabels[12]) panelLabels[12].textContent = t('invalidResources');
       loadingState.textContent = t('loadingData');
       if (languageSelect) {
         languageSelect.value = lang;
@@ -1101,6 +1131,20 @@ ADMIN_PAGE_HTML = """<!doctype html>
         node.textContent = t('noValidated');
       });
 
+      invalidResourcesNode.querySelectorAll('thead tr').forEach((row) => {
+        const headers = row.querySelectorAll('th');
+        if (headers.length === 5) {
+          headers[0].textContent = t('resource');
+          headers[1].textContent = t('code');
+          headers[2].textContent = t('reason');
+          headers[3].textContent = t('arrestedAt');
+          headers[4].textContent = t('invalidUntil');
+        }
+      });
+      invalidResourcesNode.querySelectorAll('.empty').forEach((node) => {
+        node.textContent = t('invalidResourcesEmpty');
+      });
+
       document.querySelectorAll('[data-provider]').forEach((button) => {
         button.textContent = t('testAction');
       });
@@ -1117,6 +1161,28 @@ ADMIN_PAGE_HTML = """<!doctype html>
 
     function fmt(value) {
       return value === null || value === undefined || value === '' ? t('na') : String(value);
+    }
+
+    function fmtGmtPlus5(value) {
+      if (!value) return t('na');
+      const parsed = Date.parse(value);
+      if (Number.isNaN(parsed)) return fmt(value);
+      const shifted = new Date(parsed + (5 * 60 * 60 * 1000));
+      const yyyy = shifted.getUTCFullYear();
+      const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(shifted.getUTCDate()).padStart(2, '0');
+      const hh = String(shifted.getUTCHours()).padStart(2, '0');
+      const mi = String(shifted.getUTCMinutes()).padStart(2, '0');
+      const ss = String(shifted.getUTCSeconds()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} GMT+5`;
+    }
+
+    function fmtDurationSeconds(startedAt, finishedAt) {
+      const started = Date.parse(startedAt);
+      const finished = Date.parse(finishedAt);
+      if (Number.isNaN(started) || Number.isNaN(finished)) return t('na');
+      const seconds = Math.max(0, (finished - started) / 1000);
+      return `${seconds.toFixed(2)} sec`;
     }
 
     function percent(current, total) {
@@ -1148,6 +1214,33 @@ ADMIN_PAGE_HTML = """<!doctype html>
       `;
     }
 
+    function historySessionRowHtml(session) {
+      return `
+        <tr>
+          <td><span class="pill">${fmt(session.provider)}</span></td>
+          <td class="mono">${fmt(session.model)}</td>
+          <td>${session.status === 'success' ? t('statusSuccessSession') : session.status === 'error' ? t('statusError') : fmt(session.status)}</td>
+          <td>${fmt(session.status_code)}</td>
+          <td class="mono">${fmtGmtPlus5(session.started_at)}</td>
+          <td class="mono">${fmtDurationSeconds(session.started_at, session.finished_at)}</td>
+          <td>${fmt(session.mode)}</td>
+        </tr>
+      `;
+    }
+
+    function proxyHistorySummary(sessions) {
+      const grouped = new Map();
+      (sessions || []).forEach((session) => {
+        const provider = fmt(session.provider);
+        grouped.set(provider, (grouped.get(provider) || 0) + 1);
+      });
+      const parts = Array.from(grouped.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([provider, count]) => `${provider}: ${count}`);
+      const total = (sessions || []).length;
+      return `<div class="group-sub">Провайдеры в последних ${total} сессиях: ${parts.join(' | ')}</div>`;
+    }
+
     function activeSessionsSection(rowsHtml) {
       return `
         <section>
@@ -1176,6 +1269,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
       return `
         <section>
           <h2 class="group-title">${t('proxyHistory')}</h2>
+          ${proxyHistorySummary(lastDispatcherStatusPayload?.completed_sessions || [])}
           <div class="table-wrap">
             <table>
               <thead>
@@ -1184,12 +1278,47 @@ ADMIN_PAGE_HTML = """<!doctype html>
                   <th>${t('model')}</th>
                   <th>${t('status')}</th>
                   <th>${t('code')}</th>
-                  <th>${t('startedAt')}</th>
-                  <th>${t('finishedAt')}</th>
+                  <th>${t('startedAt')} GMT+5</th>
+                  <th>sec</th>
                   <th>${t('mode')}</th>
                 </tr>
               </thead>
               <tbody>${rowsHtml || `<tr><td colspan="7" class="empty">${t('noCompletedSessions')}</td></tr>`}</tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function invalidResourceRowHtml(item) {
+      return `
+        <tr>
+          <td class="mono">${fmt(item.resource_id)}</td>
+          <td>${fmt(item.status_code)}</td>
+          <td>${fmt(item.reason)}</td>
+          <td class="mono">${formatGmtPlus5(item.arrested_at)}</td>
+          <td class="mono">${formatGmtPlus5(item.invalid_until)}</td>
+        </tr>
+      `;
+    }
+
+    function invalidResourcesSection(items) {
+      const rowsHtml = (items || []).map((item) => invalidResourceRowHtml(item)).join('');
+      return `
+        <section>
+          <h2 class="group-title">${t('invalidResources')}</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>${t('resource')}</th>
+                  <th>${t('code')}</th>
+                  <th>${t('reason')}</th>
+                  <th>${t('arrestedAt')}</th>
+                  <th>${t('invalidUntil')}</th>
+                </tr>
+              </thead>
+              <tbody>${rowsHtml || `<tr><td colspan="5" class="empty">${t('invalidResourcesEmpty')}</td></tr>`}</tbody>
             </table>
           </div>
         </section>
@@ -1205,7 +1334,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
         ? activeSessionsSection(payload.active_sessions.map(sessionRowHtml).join(''))
         : `<div class="empty">${t('noActiveSessions')}</div>`;
       proxySessionHistoryNode.innerHTML = payload.completed_sessions?.length
-        ? proxyHistorySection(payload.completed_sessions.map(sessionRowHtml).join(''))
+        ? proxyHistorySection(payload.completed_sessions.map(historySessionRowHtml).join(''))
         : `<div class="empty">${t('noCompletedSessions')}</div>`;
     }
 
@@ -1551,6 +1680,9 @@ ADMIN_PAGE_HTML = """<!doctype html>
       if (lastDispatcherStatusPayload) {
         renderDispatcherStatus(lastDispatcherStatusPayload);
       }
+      if (lastDashboardData?.dispatcherCache) {
+        invalidResourcesNode.innerHTML = invalidResourcesSection(lastDashboardData.dispatcherCache.invalid_resources?.data || []);
+      }
     }
 
     function renderValidatedLlmProgress(job) {
@@ -1768,6 +1900,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
           groupSection(t('otherTitle'), t('otherSub'), grouped.other.join('')),
         ].join('');
         recommendationsNode.innerHTML = buildRecommendations(health, models);
+        invalidResourcesNode.innerHTML = invalidResourcesSection(dispatcherCache.invalid_resources?.data || []);
         await loadValidatedLlmBlock();
         await loadDispatcherStatus();
         loadingState.style.display = 'none';
@@ -1782,6 +1915,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
         groupedTables.innerHTML = `<div class="status-error">${error.message}</div>`;
         recommendationsNode.innerHTML = recommendationCard(t('failed'), error.message);
         validatedLlmNode.innerHTML = `<div class="status-error">${error.message}</div>`;
+        invalidResourcesNode.innerHTML = `<div class="status-error">${error.message}</div>`;
         loadingState.style.display = 'none';
       }
     }

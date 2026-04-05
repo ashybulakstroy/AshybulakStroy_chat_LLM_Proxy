@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_FALLBACK_RPM = 1
+PAYMENT_REQUIRED_QUARANTINE_DAYS = 7
 LIMITS_FILE = Path(__file__).resolve().parent.parent / "provider_limits.json"
 SNAPSHOT_FILE = Path(__file__).resolve().parent.parent / "rate_limits_snapshot.json"
 
@@ -101,6 +102,9 @@ class ProviderLimitState:
     last_error: str | None = None
     headers_seen: bool = False
     last_observed_at: str | None = None
+    quarantine_until: str | None = None
+    quarantine_reason: str | None = None
+    quarantine_status_code: int | None = None
 
     def __post_init__(self) -> None:
         self.requests_minute = self.requests_minute or WindowLimit()
@@ -111,6 +115,12 @@ class ProviderLimitState:
         self.tokens_day = self.tokens_day or WindowLimit()
 
     def as_dict(self) -> dict[str, Any]:
+        quarantine = {
+            "active": self.is_quarantined(),
+            "until": self.quarantine_until,
+            "reason": self.quarantine_reason,
+            "status_code": self.quarantine_status_code,
+        }
         if self.headers_seen:
             return {
                 "provider": self.provider,
@@ -137,6 +147,7 @@ class ProviderLimitState:
                 "last_observed_at": self.last_observed_at,
                 "last_status_code": self.last_status_code,
                 "last_error": self.last_error,
+                "quarantine": quarantine,
             }
 
         return {
@@ -169,7 +180,18 @@ class ProviderLimitState:
             "last_observed_at": self.last_observed_at,
             "last_status_code": self.last_status_code,
             "last_error": self.last_error,
+            "quarantine": quarantine,
         }
+
+    def is_quarantined(self, now: datetime | None = None) -> bool:
+        if not self.quarantine_until:
+            return False
+        try:
+            until = datetime.fromisoformat(self.quarantine_until)
+        except ValueError:
+            return False
+        reference = now or datetime.now(timezone.utc)
+        return until > reference
 
     @classmethod
     def from_snapshot_dict(cls, payload: dict[str, Any]) -> "ProviderLimitState":
@@ -189,6 +211,9 @@ class ProviderLimitState:
             last_error=payload.get("last_error"),
             headers_seen=source == "response_headers",
             last_observed_at=payload.get("last_observed_at"),
+            quarantine_until=(payload.get("quarantine") or {}).get("until"),
+            quarantine_reason=(payload.get("quarantine") or {}).get("reason"),
+            quarantine_status_code=(payload.get("quarantine") or {}).get("status_code"),
         )
 
 
@@ -240,7 +265,8 @@ class RateLimitStore:
     def update_from_response(self, provider: str, headers: dict[str, str], status_code: int) -> None:
         state = self._state.setdefault(provider, ProviderLimitState(provider=provider))
         state.last_status_code = status_code
-        state.last_error = None
+        if not state.is_quarantined():
+            state.last_error = None
         state.last_observed_at = datetime.now(timezone.utc).isoformat()
 
         normalized_headers = {key.lower(): value for key, value in headers.items()}
@@ -295,12 +321,25 @@ class RateLimitStore:
             self._sync_estimated_limits_file(provider, state)
         self.save_snapshot()
 
-    def record_error(self, provider: str, status_code: int | None, detail: str) -> None:
+    def record_error(self, provider: str, status_code: int | None, detail: str) -> bool:
         state = self._state.setdefault(provider, ProviderLimitState(provider=provider))
+        was_quarantined = state.is_quarantined()
         state.last_status_code = status_code
         state.last_error = detail
         state.last_observed_at = datetime.now(timezone.utc).isoformat()
+        if status_code == 402:
+            until = datetime.now(timezone.utc) + timedelta(days=PAYMENT_REQUIRED_QUARANTINE_DAYS)
+            state.quarantine_until = until.isoformat()
+            state.quarantine_reason = detail
+            state.quarantine_status_code = status_code
         self.save_snapshot()
+        return (not was_quarantined) and state.is_quarantined()
+
+    def is_provider_quarantined(self, provider: str) -> bool:
+        state = self._state.get(provider)
+        if state is None:
+            return False
+        return state.is_quarantined()
 
     def record_probe_summary(self, successful: list[str], failed: list[dict[str, Any]]) -> None:
         self.last_probe_at = datetime.now(timezone.utc).isoformat()

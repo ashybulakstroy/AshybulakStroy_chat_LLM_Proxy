@@ -1,10 +1,11 @@
 from typing import Any, List, Optional, Union
+
 from pydantic import BaseModel, Field
 
 
 class Message(BaseModel):
     role: str = Field(..., examples=["user"])
-    content: str = Field(..., examples=["Ассаламу Алейкум!"])
+    content: str = Field(..., examples=["Ассаламу алейкум!"])
     name: Optional[str] = None
 
 
@@ -16,8 +17,13 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = Field(default=None, examples=[32])
     provider: Optional[str] = Field(
         default=None,
-        description="Имя провайдера. Используйте 'auto' для выбора по блоку рекомендаций.",
+        description="Имя провайдера. Используйте 'auto' для автоматического выбора по логике proxy.",
         examples=["auto", "groq"],
+    )
+    resource_affinity: Optional[str] = Field(
+        default="auto",
+        description="Политика привязки клиента к одному и тому же внутреннему ресурсу. 'sticky' старается держать клиента на прежнем provider+model, если ресурс доступен.",
+        examples=["auto", "sticky"],
     )
     metadata: Optional[dict[str, Any]] = None
 
@@ -27,8 +33,8 @@ class EmbeddingRequest(BaseModel):
     input: Union[str, List[str]]
     provider: Optional[str] = Field(
         default=None,
-        description="Имя провайдера или 'auto', если появится поддержка авто-выбора для embeddings.",
-        examples=["groq"],
+        description="Имя провайдера или 'auto', если позже будет включена авто-маршрутизация для embeddings.",
+        examples=["groq", "auto"],
     )
     metadata: Optional[dict[str, Any]] = None
 

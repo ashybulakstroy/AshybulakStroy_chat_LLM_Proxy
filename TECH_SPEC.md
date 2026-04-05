@@ -1,123 +1,166 @@
 # Техническое задание: AshybulakStroy AI HUB
 
 ## Цель
-Создать сервис AshybulakStroy AI HUB, который принимает унифицированные API-запросы и проксирует их к OpenAI-совместимым LLM-провайдерам с возможностью дальнейшего расширения.
 
-## Основные возможности
+Построить OpenAI-совместимый LLM proxy, который:
 
-1. API маршрутизации
-   - Поддержка `/v1/chat/completions`
-   - Поддержка `/v1/embeddings`
-   - Поддержка `/v1/models`
-   - Легкий переход на новые провайдеры
+- принимает унифицированные API-запросы
+- маршрутизирует их к нескольким upstream-провайдерам
+- показывает живое состояние ресурсов в админке
+- служит основой для будущей P2P-сети
 
-2. Конфигурация провайдеров
-   - Поддержка нескольких провайдеров через конфигурацию
-   - Приоритет провайдера по умолчанию
-   - Переопределение провайдера в запросе
+## Основные функции
 
-3. Безопасность
-   - Хранение ключей через переменные окружения
-   - Ограничение доступа на уровне API-ключей (расширение)
+1. LLM proxy
+   - `/v1/chat/completions`
+   - `/v1/embeddings`
+   - `/v1/models`
 
-4. Логирование
-   - Запросы и ответы
-   - Ошибки провайдеров
+2. Мультипровайдерность
+   - Groq
+   - OpenRouter
+   - Cerebras
+   - Gemini
+   - SambaNova
+   - EdenAI
+   - Fireworks
 
-5. Расширяемость
-   - Общий интерфейс для провайдеров
-   - Поддержка OpenAI, Azure OpenAI и других API
+3. Живая телеметрия
+   - live-limit probe
+   - remaining RPM / RPD / TPM
+   - last error
+   - last observed timestamps
 
-## Текущий статус реализации
+4. Основная админка
+   - обзор по сервису
+   - Block #2 с локальными LLM-ресурсами
+   - блок рекомендаций
+   - блок истории proxy-сессий
 
-- Реализован FastAPI-сервис с endpoint'ами `/health`, `/v1/models`, `/v1/chat/completions`, `/v1/embeddings`
-- Подключён один OpenAI-совместимый провайдер
-- Базовая конфигурация идёт через `.env`
-- Полноценная маршрутизация между несколькими провайдерами пока не реализована
+5. P2P debug admin
+   - network map
+   - known peers
+   - routing table
+   - dispatch preview
 
-## Архитектура
+## Текущая архитектура
 
-- `app/main.py` — инициализация FastAPI
-- `app/routes.py` — конечные точки API
-- `app/schemas.py` — Pydantic-модели запросов/ответов
-- `app/config.py` — настройки и переменные окружения
-- `app/providers/` — адаптеры для провайдеров
+### Локальный proxy
 
-## Протоколы
+- `app/main.py` — старт FastAPI
+- `app/routes.py` — HTTP endpoints и runtime orchestration
+- `app/router_service.py` — dispatch к upstream providers
+- `app/providers/openai_provider.py` — OpenAI-compatible transport
+- `app/rate_limits.py` — live rate-limit state
+- `app/admin_ui.py` — основная админка
 
-- JSON-over-HTTP
-- REST API
+### P2P MVP
 
-## Требования
+- `app/p2p_service.py` — P2P runtime state и route logic
+- `app/p2p_admin_ui.py` — P2P debug admin
 
-- Python 3.11+
-- FastAPI
-- HTTPX
-- Pydantic
-- .env конфигурация
+## Логика локального выбора LLM-ресурса
 
-## Дальнейшие шаги
+### Старый слой
 
-- Добавить поддержку маршрутизации по телеметрии
-- Реализовать систему ключей клиентов
-- Добавить кеширование и ретраи
-- Написать тесты и CI
+Старый слой сохраняется как фильтр пригодных ресурсов:
 
-## Current P2P MVP Status
+- validation
+- live limits
+- last error
+- runtime/admin filtering
 
-The project now also includes a P2P orchestration MVP focused on debug visibility and peer selection preparation.
+### Новый слой
 
-Implemented in MVP:
+Новый слой работает поверх уже пригодных ресурсов.
 
-- runtime node roles:
-  - `peer`
-  - `master`
-  - `master_cache`
-  - `auto`
-- P2P enable/disable runtime switch
-- separate P2P debug admin page
-- in-memory peer registry
-- peer heartbeat upsert
-- peer capability tracking:
-  - providers
-  - models
-  - chat support
-  - embeddings support
-  - health score
-- direct route classification:
-  - `direct_provider_access=true`
-  - `link-only` peers that only reference another node
-- network map summary
-- route hashing:
-  - `route_id = sha256(api_key + provider + model)[:12]`
-- route TTL cleanup:
-  - non-working routes expire after `P2P_ROUTE_TTL_MIN`
-- dispatch preview with capability/health filtering
-- P2P event logs with `p2p_...` prefix
+Для `provider=auto` и `model=auto`:
 
-Current route-capacity semantics:
+1. Строится пул пригодных `provider + model`
+2. Отсекаются ресурсы:
+   - с недавней ошибкой
+   - без remaining RPM
+3. Применяется cold-resource scheduling:
+   - меньше недавних вызовов лучше
+   - более старое последнее использование лучше
+   - разнообразие провайдеров лучше
+4. `round-robin` используется только среди равных кандидатов
 
-- route capacity is calculated from direct provider links only
-- master routes are counted only when the master has local provider access
-- peer routes are counted only for online peers with `direct_provider_access=true`
-- link-only peers are shown in admin for topology/debug, but they do not increase route capacity
-- `Network Map` now shows:
-  - unique route count
-  - redundant route count by duplicate route hash
-- `Маршрутизация` now uses `Route ID` as the primary route identifier
-- route slots are calculated with:
-  - `ceil(P2P_MAX_SHARED_SLOTS_PER_MIN / resources_in_node)`
+## Sticky affinity
 
-Current P2P admin page highlights:
+В `ChatCompletionRequest` добавлено поле:
 
-- `Network Map` shows direct provider capacity
-- `Known Peers` is placed directly under `Network Map`
-- peer rows show whether the node is `direct` or `link-only`
+```json
+{
+  "resource_affinity": "auto | sticky"
+}
+```
 
-Not implemented yet:
+Если клиент передает:
 
-- real peer-to-peer remote execution
-- peer authentication
-- signal server
-- mDNS discovery
-- distributed cache sync
+```json
+{
+  "provider": "auto",
+  "model": "auto",
+  "resource_affinity": "sticky",
+  "metadata": {
+    "client_id": "user-123"
+  }
+}
+```
+
+то сервис:
+
+- сохраняет внутреннюю привязку `client_id -> resource`
+- повторно использует тот же ресурс при следующем запросе
+- перепривязывает клиента, если старый ресурс перестал быть пригодным
+
+## Block #2
+
+Block #2 основной админки — это:
+
+`Local Executable LLM Resource Inventory`
+
+То есть локальная таблица ресурсов исполнения:
+
+- каждая строка = `provider + model`
+- каждый такой ресурс может принять локальный LLM-запрос
+
+## P2P route model
+
+P2P использует отдельную сетевую сущность маршрута:
+
+- `route_id = sha256(api_key + provider + model)[:12]`
+- `route_status`
+- `direct_provider_access`
+- `link-only`
+- `slots`
+
+### TTL
+
+Для нерабочих маршрутов:
+
+- `P2P_ROUTE_TTL_MIN = 1440`
+
+После истечения TTL невалидный маршрут удаляется из P2P route registry.
+
+### Slots
+
+Слоты считаются как:
+
+`ceil(P2P_MAX_SHARED_SLOTS_PER_MIN / resources_in_node)`
+
+## Ограничения текущего MVP
+
+- P2P remote execution еще не реализован
+- peer authentication еще не реализован
+- signal server и mDNS еще не реализованы
+- sticky-affinity сейчас опирается на `metadata.client_id`
+
+## Следующие шаги
+
+1. Добавить проверку `response_type` (`json`, `text`, `audio`, `video`)
+2. При mismatch response type помечать ресурс как ошибочный и переходить к следующему
+3. Добавить TTL/наблюдаемость для sticky bindings
+4. Довести P2P до полноценного remote execution
+5. Написать автотесты на scheduler и affinity

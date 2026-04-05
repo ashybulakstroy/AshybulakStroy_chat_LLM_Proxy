@@ -50,7 +50,11 @@ class ProviderRouter:
             if requested_provider not in self.provider_configs:
                 raise ValueError(f"Provider '{requested_provider}' is not configured")
             return [requested_provider]
-        return self.list_available_providers()
+        return [
+            provider_name
+            for provider_name in self.list_available_providers()
+            if not rate_limit_store.is_provider_quarantined(provider_name)
+        ]
 
     def get_proxy_mode(self) -> str:
         return self.proxy_mode
@@ -93,6 +97,15 @@ class ProviderRouter:
         errors: list[dict[str, Any]] = []
 
         for provider_name in target_providers:
+            if rate_limit_store.is_provider_quarantined(provider_name):
+                errors.append(
+                    {
+                        "provider": provider_name,
+                        "status_code": 402,
+                        "detail": "Provider is quarantined due to Payment Required and hidden from model listings.",
+                    }
+                )
+                continue
             provider = self.get_provider(provider_name)
             try:
                 response = await provider.get_models()

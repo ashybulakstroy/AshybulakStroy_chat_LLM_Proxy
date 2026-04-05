@@ -1,7 +1,9 @@
 ﻿import asyncio
+from collections import deque
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -20,6 +22,7 @@ provider_router = ProviderRouter()
 LIMITS_FILE = Path(__file__).resolve().parent.parent / "provider_limits.json"
 MODEL_VALIDATION_FILE = Path(__file__).resolve().parent.parent / "model_validation_snapshot.json"
 ADMIN_CACHE_FILE = Path(__file__).resolve().parent.parent / "admin_dashboard_cache.json"
+INVALID_RESOURCES_FILE = Path(__file__).resolve().parent.parent / "invalid_resources.json"
 PREFERRED_TEST_MODELS = {
     "groq": ["llama-3.1-8b-instant", "qwen/qwen3-32b"],
     "openrouter": ["qwen/qwen3.6-plus-preview:free", "openai/gpt-5.4-mini"],
@@ -66,6 +69,12 @@ LIVE_LIMITS_JOB_STATE = {
 }
 LIVE_LIMITS_JOB_TASK: asyncio.Task | None = None
 RUNTIME_DISPATCHER_CACHE: dict = {}
+AUTO_RESOURCE_USAGE_WINDOW_SEC = 60
+AUTO_RESOURCE_AFFINITY_TTL_SEC = 60 * 60 * 12
+AUTO_RESOURCE_USAGE: dict[str, dict] = {}
+CLIENT_RESOURCE_AFFINITY: dict[str, dict] = {}
+AUTO_RESOURCE_ROUND_ROBIN_CURSOR = 0
+AUTO_LAST_SELECTED_PROVIDER: str | None = None
 
 
 def _set_runtime_dispatcher_cache(payload: dict | None) -> dict:
@@ -101,15 +110,151 @@ def _save_model_validation_results(payload: dict) -> None:
 
 def _load_admin_cache() -> dict:
     if not ADMIN_CACHE_FILE.exists():
-        return {"validated_llm": {"object": "list", "data": [], "meta": {"cache_created_at": None}}}
+        return {
+            "validated_llm": {"object": "list", "data": [], "meta": {"cache_created_at": None}},
+            "invalid_resources": {"object": "list", "data": [], "meta": {"updated_at": None}},
+        }
     try:
         return json.loads(ADMIN_CACHE_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"validated_llm": {"object": "list", "data": [], "meta": {"cache_created_at": None}}}
+        return {
+            "validated_llm": {"object": "list", "data": [], "meta": {"cache_created_at": None}},
+            "invalid_resources": {"object": "list", "data": [], "meta": {"updated_at": None}},
+        }
 
 
 def _save_admin_cache(payload: dict) -> None:
     ADMIN_CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _empty_invalid_resources_payload() -> dict:
+    return {"object": "list", "data": [], "meta": {"updated_at": None, "total": 0}}
+
+
+def _load_invalid_resources() -> dict:
+    if not INVALID_RESOURCES_FILE.exists():
+        return _empty_invalid_resources_payload()
+    try:
+        payload = json.loads(INVALID_RESOURCES_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _empty_invalid_resources_payload()
+    if not isinstance(payload, dict):
+        return _empty_invalid_resources_payload()
+    payload.setdefault("object", "list")
+    payload.setdefault("data", [])
+    payload.setdefault("meta", {})
+    payload["meta"].setdefault("updated_at", None)
+    payload["meta"]["total"] = len(payload.get("data", []))
+    return payload
+
+
+def _save_invalid_resources(payload: dict) -> dict:
+    normalized = {
+        "object": "list",
+        "data": list(payload.get("data", [])),
+        "meta": {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "total": len(payload.get("data", [])),
+        },
+    }
+    INVALID_RESOURCES_FILE.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return normalized
+
+
+def _resource_id(provider_name: str, model_id: str) -> str:
+    return f"{provider_name.strip()}::{model_id.strip()}"
+
+
+def _resolve_local_route_id(provider_name: str | None, model_id: str | None) -> str:
+    if not provider_name or not model_id:
+        return ""
+    return p2p_service.resolve_local_route_id(str(provider_name), str(model_id))
+
+
+def _active_invalid_resource_entries() -> list[dict]:
+    payload = _load_invalid_resources()
+    now = datetime.now(timezone.utc)
+    active: list[dict] = []
+    changed = False
+    for item in payload.get("data", []):
+        if not isinstance(item, dict):
+            changed = True
+            continue
+        invalid_until = item.get("invalid_until")
+        if invalid_until:
+            try:
+                until = datetime.fromisoformat(str(invalid_until))
+            except ValueError:
+                changed = True
+                continue
+            if until <= now:
+                changed = True
+                continue
+        active.append(item)
+    if changed:
+        payload["data"] = active
+        _save_invalid_resources(payload)
+    return active
+
+
+def _invalid_resource_index() -> dict[str, dict]:
+    return {
+        str(item.get("resource_id") or ""): item
+        for item in _active_invalid_resource_entries()
+        if item.get("resource_id")
+    }
+
+
+def _invalid_route_id_index() -> dict[str, dict]:
+    return {
+        str(item.get("route_id") or ""): item
+        for item in _active_invalid_resource_entries()
+        if item.get("route_id")
+    }
+
+
+def _is_invalid_resource(provider_name: str | None, model_id: str | None) -> bool:
+    if not provider_name or not model_id:
+        return False
+    route_id = _resolve_local_route_id(provider_name, model_id)
+    if route_id and route_id in _invalid_route_id_index():
+        return True
+    return _resource_id(provider_name, model_id) in _invalid_resource_index()
+
+
+def _find_invalid_resource(provider_name: str | None, model_id: str | None) -> dict:
+    route_id = _resolve_local_route_id(provider_name, model_id)
+    if route_id:
+        item = _invalid_route_id_index().get(route_id)
+        if item:
+            return item
+    if provider_name and model_id:
+        item = _invalid_resource_index().get(_resource_id(provider_name, model_id))
+        if item:
+            return item
+    return {}
+
+
+async def _sync_p2p_route_catalog(reason: str) -> dict[str, Any]:
+    await _refresh_admin_cache_async()
+    try:
+        return await p2p_service.sync_local_route_catalog(reason=reason)
+    except Exception:
+        provider_router.logger.exception("p2p_route_catalog_sync_failed reason=%s", reason)
+        return {"status": "error", "reason": reason}
+
+
+def _invalid_resources_payload() -> dict:
+    active = _active_invalid_resource_entries()
+    source = _load_invalid_resources()
+    return {
+        "object": "list",
+        "data": active,
+        "meta": {
+            "updated_at": (source.get("meta") or {}).get("updated_at"),
+            "total": len(active),
+        },
+    }
 
 
 _set_runtime_dispatcher_cache(_load_admin_cache())
@@ -171,6 +316,9 @@ def _reset_validated_llm_job_state(started_by: str | None = None) -> None:
 
 
 def _provider_recommendation(provider_state: dict) -> str:
+    quarantine = provider_state.get("quarantine", {})
+    if quarantine.get("active"):
+        return "quarantined"
     if provider_state.get("last_error"):
         return "retry"
     limits = provider_state.get("limits", {})
@@ -212,13 +360,26 @@ def _build_dispatcher_cache_payload(
         block_two_payload = cache.get("block_two", {"object": "list", "data": [], "meta": {}})
     if validated_llm_payload is None:
         validated_llm_payload = cache.get("validated_llm", {"object": "list", "data": [], "meta": {}})
+    invalid_resources_payload = _invalid_resources_payload()
+    invalid_index = {
+        item.get("resource_id"): item
+        for item in invalid_resources_payload.get("data", [])
+        if isinstance(item, dict) and item.get("resource_id")
+    }
 
     routes = cache.get("routes", [])
     if all_models is not None:
         routes = []
         for model in all_models:
             provider_name = model.get("provider")
+            model_id = model.get("id")
+            invalid_item = invalid_index.get(_resource_id(str(provider_name or ""), str(model_id or "")))
+            if invalid_item:
+                continue
             provider_state = limits_snapshot.get(provider_name, {})
+            quarantine = provider_state.get("quarantine", {})
+            if quarantine.get("active"):
+                continue
             validity = _model_validity(model, validation_payload)
             routes.append(
                 {
@@ -229,6 +390,7 @@ def _build_dispatcher_cache_payload(
                     "last_status_code": provider_state.get("last_status_code"),
                     "last_error": provider_state.get("last_error"),
                     "last_observed_at": provider_state.get("last_observed_at"),
+                    "quarantine": quarantine,
                     "rpm_remaining": provider_state.get("limits", {}).get("requests", {}).get("minute", {}).get("remaining"),
                     "rpd_remaining": provider_state.get("limits", {}).get("requests", {}).get("day", {}).get("remaining"),
                     "tpm_remaining": provider_state.get("limits", {}).get("tokens", {}).get("minute", {}).get("remaining"),
@@ -247,6 +409,7 @@ def _build_dispatcher_cache_payload(
                 "last_status_code": provider_state.get("last_status_code"),
                 "last_error": provider_state.get("last_error"),
                 "last_observed_at": provider_state.get("last_observed_at"),
+                "quarantine": provider_state.get("quarantine", {}),
                 "limits": provider_state.get("limits", {}),
                 "estimated_limits": estimated_limits.get(provider_name, {}),
                 "recommendation": _provider_recommendation(provider_state),
@@ -259,6 +422,7 @@ def _build_dispatcher_cache_payload(
         "routes": routes,
         "block_two": block_two_payload,
         "validated_llm": validated_llm_payload,
+        "invalid_resources": invalid_resources_payload,
     }
 
 
@@ -729,7 +893,10 @@ def _filter_models_for_current_plan(models: list[dict]) -> list[dict]:
     return [
         model
         for model in models
-        if isinstance(model, dict) and model.get("id") and _is_model_available_for_current_plan(model)
+        if isinstance(model, dict)
+        and model.get("id")
+        and _is_model_available_for_current_plan(model)
+        and not _is_invalid_resource(str(model.get("provider") or ""), str(model.get("id") or ""))
     ]
 
 
@@ -739,13 +906,16 @@ def _filter_models_with_live_limits(models: list[dict]) -> list[dict]:
         provider
         for provider, item in snapshot.items()
         if item.get("limits", {}).get("source") == "response_headers"
+        and not item.get("quarantine", {}).get("active")
     }
     if not providers_with_live_limits:
         estimated_limits = _load_estimated_limits().get("providers", {})
         providers_with_live_limits = {
             provider
             for provider, item in estimated_limits.items()
-            if isinstance(item, dict) and (isinstance(item.get("estimated_rpm"), int) or isinstance(item.get("estimated_rpd"), int))
+            if isinstance(item, dict)
+            and (isinstance(item.get("estimated_rpm"), int) or isinstance(item.get("estimated_rpd"), int))
+            and not snapshot.get(provider, {}).get("quarantine", {}).get("active")
         }
     return [
         model
@@ -799,14 +969,37 @@ def _estimated_provider_limits(provider_name: str) -> tuple[int, int]:
 
 
 def _runtime_chat_models() -> list[dict]:
+    # Block #2 and Block #4 are both real execution resource pools for incoming LLM requests.
+    # The practical difference is observability:
+    # - Block #2 contains resources with measurable live/estimated limits for admin visibility.
+    # - Block #4 contains validated working LLM resources, but their limit telemetry may be absent
+    #   or not suitable for the numeric Block #2 presentation.
+    # Runtime dispatcher should build a union of both pools instead of using Block #4 as a fallback switch.
     cache = _get_runtime_dispatcher_cache()
-    validated_llm_models = (cache.get("validated_llm") or {}).get("data") or []
-    if validated_llm_models:
-        return [model for model in validated_llm_models if isinstance(model, dict)]
-
-    block_two_models = (cache.get("block_two") or {}).get("data") or []
-    if block_two_models:
-        return [model for model in block_two_models if isinstance(model, dict)]
+    combined_models = [
+        *(((cache.get("validated_llm") or {}).get("data") or [])),
+        *(((cache.get("block_two") or {}).get("data") or [])),
+    ]
+    deduped: list[dict] = []
+    seen_keys: set[str] = set()
+    for model in combined_models:
+        if not isinstance(model, dict):
+            continue
+        provider = str(model.get("provider") or "").strip()
+        model_id = str(model.get("id") or "").strip()
+        if not provider or not model_id:
+            continue
+        if rate_limit_store.is_provider_quarantined(provider):
+            continue
+        if _is_invalid_resource(provider, model_id):
+            continue
+        key = f"{provider}::{model_id}"
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(model)
+    if deduped:
+        return deduped
 
     routes = cache.get("routes") or []
     return [
@@ -816,15 +1009,126 @@ def _runtime_chat_models() -> list[dict]:
             "category": route.get("category"),
         }
         for route in routes
-        if isinstance(route, dict) and route.get("provider") and route.get("model_id")
+        if isinstance(route, dict)
+        and route.get("provider")
+        and route.get("model_id")
+        and not rate_limit_store.is_provider_quarantined(str(route.get("provider") or ""))
+        and not _is_invalid_resource(str(route.get("provider") or ""), str(route.get("model_id") or ""))
     ]
+
+
+def _normalize_resource_affinity(value: str | None) -> str:
+    cleaned = str(value or "auto").strip().lower()
+    return "sticky" if cleaned == "sticky" else "auto"
+
+
+def _extract_client_id(request: ChatCompletionRequest) -> str | None:
+    metadata = request.metadata or {}
+    if not isinstance(metadata, dict):
+        return None
+    for key in ("client_id", "user_id", "session_id", "chat_id", "thread_id", "sender_id"):
+        value = metadata.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _prune_auto_resource_state() -> None:
+    now = _utc_now().timestamp()
+    stale_usage_keys: list[str] = []
+    for resource_id, usage in AUTO_RESOURCE_USAGE.items():
+        recent_calls = deque(
+            timestamp
+            for timestamp in usage.get("recent_calls", deque())
+            if now - float(timestamp) <= AUTO_RESOURCE_USAGE_WINDOW_SEC
+        )
+        if recent_calls:
+            usage["recent_calls"] = recent_calls
+        else:
+            stale_usage_keys.append(resource_id)
+
+    for resource_id in stale_usage_keys:
+        AUTO_RESOURCE_USAGE.pop(resource_id, None)
+
+    stale_affinity_keys = [
+        client_id
+        for client_id, binding in CLIENT_RESOURCE_AFFINITY.items()
+        if now - float(binding.get("bound_at_ts", 0)) > AUTO_RESOURCE_AFFINITY_TTL_SEC
+    ]
+    for client_id in stale_affinity_keys:
+        CLIENT_RESOURCE_AFFINITY.pop(client_id, None)
+
+
+def _build_resource_id(provider_name: str, model_id: str) -> str:
+    return f"{provider_name}::{model_id}"
+
+
+def _resource_usage(resource_id: str) -> dict:
+    return AUTO_RESOURCE_USAGE.setdefault(resource_id, {"recent_calls": deque(), "last_used_ts": 0.0})
+
+
+def _mark_resource_selected(resource_id: str, provider_name: str) -> None:
+    global AUTO_LAST_SELECTED_PROVIDER
+    usage = _resource_usage(resource_id)
+    now = _utc_now().timestamp()
+    usage["last_used_ts"] = now
+    recent_calls = usage.get("recent_calls")
+    if not isinstance(recent_calls, deque):
+        recent_calls = deque(recent_calls or [])
+        usage["recent_calls"] = recent_calls
+    recent_calls.append(now)
+    while recent_calls and now - float(recent_calls[0]) > AUTO_RESOURCE_USAGE_WINDOW_SEC:
+        recent_calls.popleft()
+    AUTO_LAST_SELECTED_PROVIDER = provider_name
+
+
+def _resource_recent_request_count(resource_id: str) -> int:
+    usage = AUTO_RESOURCE_USAGE.get(resource_id)
+    if not usage:
+        return 0
+    recent_calls = usage.get("recent_calls", deque())
+    if not isinstance(recent_calls, deque):
+        recent_calls = deque(recent_calls or [])
+        usage["recent_calls"] = recent_calls
+    now = _utc_now().timestamp()
+    while recent_calls and now - float(recent_calls[0]) > AUTO_RESOURCE_USAGE_WINDOW_SEC:
+        recent_calls.popleft()
+    return len(recent_calls)
+
+
+def _resource_last_used_ts(resource_id: str) -> float:
+    usage = AUTO_RESOURCE_USAGE.get(resource_id) or {}
+    return float(usage.get("last_used_ts") or 0.0)
+
+
+def _select_round_robin_candidate(candidates: list[dict], tie_key: tuple) -> dict:
+    global AUTO_RESOURCE_ROUND_ROBIN_CURSOR
+
+    tied = [candidate for candidate in candidates if candidate["sort_key"] == tie_key]
+    tied.sort(key=lambda item: item["resource_id"])
+    if not tied:
+        raise ValueError("Expected at least one tied candidate for round-robin selection")
+
+    selected = tied[AUTO_RESOURCE_ROUND_ROBIN_CURSOR % len(tied)]
+    AUTO_RESOURCE_ROUND_ROBIN_CURSOR = (AUTO_RESOURCE_ROUND_ROBIN_CURSOR + 1) % max(len(tied), 1)
+    return selected
 
 
 def _pick_auto_route(
     chat_models: list[dict],
-    requested_provider: str | None = None,
-    requested_model: str | None = None,
-) -> dict[str, str] | None:
+    request: ChatCompletionRequest,
+) -> dict[str, str | bool | int | None] | None:
+    _prune_auto_resource_state()
+
+    requested_provider = request.provider
+    requested_model = request.model
+    resource_affinity = _normalize_resource_affinity(getattr(request, "resource_affinity", None))
+    client_id = _extract_client_id(request)
+
     provider_names = list(settings.get_provider_configs().keys())
     snapshot = rate_limit_store.get_snapshot(provider_names)
     filtered_models = [
@@ -852,11 +1156,19 @@ def _pick_auto_route(
             models_count_by_provider[provider_name] = models_count_by_provider.get(provider_name, 0) + 1
 
     route_candidates: list[dict] = []
+    previous_binding = CLIENT_RESOURCE_AFFINITY.get(client_id) if client_id else None
+    previous_provider = previous_binding.get("provider") if isinstance(previous_binding, dict) else None
+
     for index, model in enumerate(filtered_models):
         provider_name = model.get("provider")
-        if not provider_name:
+        model_id = model.get("id")
+        if not provider_name or not model_id:
             continue
         item = snapshot.get(provider_name, {})
+        if item.get("quarantine", {}).get("active"):
+            continue
+        if _is_invalid_resource(provider_name, model_id):
+            continue
         source = item.get("limits", {}).get("source")
         estimated_rpm, estimated_rpd = _estimated_provider_limits(provider_name)
         has_live_limits = source == "response_headers"
@@ -867,15 +1179,36 @@ def _pick_auto_route(
         rpm_remaining = _remaining_rpm(item)
         rpd_remaining = _remaining_rpd(item)
         tpm_remaining = _remaining_tpm(item)
+        effective_rpm_remaining = rpm_remaining if rpm_remaining is not None else estimated_rpm
+        effective_rpd_remaining = rpd_remaining if rpd_remaining is not None else estimated_rpd
+        effective_tpm_remaining = tpm_remaining if tpm_remaining is not None else -1
+        has_recent_error = bool(item.get("last_error"))
+        if has_recent_error:
+            continue
+        if effective_rpm_remaining == 0 or effective_rpd_remaining == 0 or effective_tpm_remaining == 0:
+            continue
+
+        resource_id = _build_resource_id(provider_name, model_id)
+        recent_request_count = _resource_recent_request_count(resource_id)
+        last_used_ts = _resource_last_used_ts(resource_id)
+        same_provider_penalty = 0
+        if previous_provider and previous_provider == provider_name:
+            same_provider_penalty += 1
+        if AUTO_LAST_SELECTED_PROVIDER and AUTO_LAST_SELECTED_PROVIDER == provider_name:
+            same_provider_penalty += 1
         route_candidates.append(
             {
                 "provider": provider_name,
-                "model": model.get("id"),
+                "model": model_id,
+                "resource_id": resource_id,
                 "source_rank": 0 if has_live_limits else 1,
-                "rpm_remaining": rpm_remaining if rpm_remaining is not None else estimated_rpm,
-                "rpd_remaining": rpd_remaining if rpd_remaining is not None else estimated_rpd,
-                "tpm_remaining": tpm_remaining if tpm_remaining is not None else -1,
+                "rpm_remaining": effective_rpm_remaining,
+                "rpd_remaining": effective_rpd_remaining,
+                "tpm_remaining": effective_tpm_remaining,
                 "models_count": models_count_by_provider.get(provider_name, 0),
+                "recent_request_count": recent_request_count,
+                "last_used_ts": last_used_ts,
+                "same_provider_penalty": same_provider_penalty,
                 "index": index,
             }
         )
@@ -883,19 +1216,77 @@ def _pick_auto_route(
     if not route_candidates:
         return None
 
-    route_candidates.sort(
-        key=lambda item: (
-            item["source_rank"],
-            -item["rpm_remaining"],
-            -item["tpm_remaining"],
-            -item["rpd_remaining"],
-            -item["models_count"],
-            item["index"],
+    candidate_by_resource_id = {candidate["resource_id"]: candidate for candidate in route_candidates}
+    sticky_reused = False
+    if resource_affinity == "sticky" and client_id and previous_binding:
+        sticky_candidate = candidate_by_resource_id.get(previous_binding.get("resource_id"))
+        if sticky_candidate is not None:
+            sticky_reused = True
+            selected = sticky_candidate
+            _mark_resource_selected(selected["resource_id"], selected["provider"])
+            CLIENT_RESOURCE_AFFINITY[client_id] = {
+                "resource_id": selected["resource_id"],
+                "provider": selected["provider"],
+                "model": selected["model"],
+                "bound_at_ts": _utc_now().timestamp(),
+            }
+            provider_router.logger.info(
+                "resource_selected policy=sticky_reuse client_id=%s resource_id=%s provider=%s model=%s eligible=%s",
+                client_id,
+                selected["resource_id"],
+                selected["provider"],
+                selected["model"],
+                len(route_candidates),
+            )
+            return {
+                "provider": selected["provider"],
+                "model": selected["model"],
+                "resource_id": selected["resource_id"],
+                "client_id": client_id,
+                "sticky_reused": sticky_reused,
+                "selection_policy": "sticky_reuse",
+                "eligible_resources": len(route_candidates),
+            }
+
+    for candidate in route_candidates:
+        candidate["sort_key"] = (
+            candidate["source_rank"],
+            candidate["last_used_ts"],
+            candidate["recent_request_count"],
+            candidate["same_provider_penalty"],
+            -candidate["rpm_remaining"],
+            -candidate["tpm_remaining"],
+            -candidate["rpd_remaining"],
+            -candidate["models_count"],
         )
+
+    route_candidates.sort(key=lambda item: item["sort_key"])
+    selected = _select_round_robin_candidate(route_candidates, route_candidates[0]["sort_key"])
+    _mark_resource_selected(selected["resource_id"], selected["provider"])
+    if resource_affinity == "sticky" and client_id:
+        CLIENT_RESOURCE_AFFINITY[client_id] = {
+            "resource_id": selected["resource_id"],
+            "provider": selected["provider"],
+            "model": selected["model"],
+            "bound_at_ts": _utc_now().timestamp(),
+        }
+    provider_router.logger.info(
+        "resource_selected policy=coldest_eligible_round_robin client_id=%s resource_id=%s provider=%s model=%s eligible=%s affinity=%s",
+        client_id,
+        selected["resource_id"],
+        selected["provider"],
+        selected["model"],
+        len(route_candidates),
+        resource_affinity,
     )
     return {
-        "provider": route_candidates[0]["provider"],
-        "model": route_candidates[0]["model"],
+        "provider": selected["provider"],
+        "model": selected["model"],
+        "resource_id": selected["resource_id"],
+        "client_id": client_id,
+        "sticky_reused": sticky_reused,
+        "selection_policy": "coldest_eligible_round_robin",
+        "eligible_resources": len(route_candidates),
     }
 
 
@@ -1090,6 +1481,106 @@ async def get_estimated_limits() -> dict:
     return _load_estimated_limits()
 
 
+@router.get("/admin/invalid-resources", tags=["Admin"])
+@router.get("/invalid_resource", tags=["Admin"])
+async def get_invalid_resources() -> dict:
+    return _invalid_resources_payload()
+
+
+@router.post("/admin/invalid-resources", tags=["Admin"])
+@router.post("/invalid_resource", tags=["Admin"])
+async def add_invalid_resource(
+    provider_name: str = Query(...),
+    model_id: str = Query(...),
+    route_id: str | None = Query(default=None),
+    reason: str = Query(default="manual_invalid_resource"),
+    status_code: int | None = Query(default=None),
+    invalid_days: int | None = Query(default=None),
+    source: str = Query(default="manual"),
+) -> dict:
+    provider_name = provider_name.strip()
+    model_id = model_id.strip()
+    if not provider_name or not model_id:
+        raise HTTPException(status_code=400, detail="provider_name and model_id are required")
+
+    payload = _load_invalid_resources()
+    resource_id = _resource_id(provider_name, model_id)
+    resolved_route_id = str(route_id or "").strip() or _resolve_local_route_id(provider_name, model_id)
+    arrested_at = datetime.now(timezone.utc).isoformat()
+    invalid_until = None
+    if invalid_days is not None and invalid_days > 0:
+        invalid_until = (datetime.now(timezone.utc) + timedelta(days=invalid_days)).isoformat()
+
+    next_item = {
+        "resource_id": resource_id,
+        "provider": provider_name,
+        "model": model_id,
+        "route_id": resolved_route_id,
+        "reason": reason,
+        "status_code": status_code,
+        "source": source,
+        "arrested_at": arrested_at,
+        "invalid_until": invalid_until,
+    }
+
+    data = [
+        item
+        for item in payload.get("data", [])
+        if isinstance(item, dict)
+        and item.get("resource_id") != resource_id
+        and (not resolved_route_id or item.get("route_id") != resolved_route_id)
+    ]
+    data.append(next_item)
+    payload["data"] = sorted(data, key=lambda item: str(item.get("arrested_at") or ""), reverse=True)
+    saved = _save_invalid_resources(payload)
+    await _sync_p2p_route_catalog(reason=f"invalid_resource_added:{resolved_route_id or resource_id}")
+    return {"status": "ok", "item": next_item, "invalid_resources": saved}
+
+
+@router.delete("/admin/invalid-resources", tags=["Admin"])
+@router.delete("/invalid_resource", tags=["Admin"])
+async def delete_invalid_resource(
+    resource_id: str | None = Query(default=None),
+    route_id: str | None = Query(default=None),
+    provider_name: str | None = Query(default=None),
+    model_id: str | None = Query(default=None),
+) -> dict:
+    resolved_resource_id = (resource_id or "").strip()
+    resolved_route_id = (route_id or "").strip()
+    if not resolved_resource_id:
+        if not provider_name or not model_id:
+            if not resolved_route_id:
+                raise HTTPException(status_code=400, detail="resource_id, route_id, or provider_name + model_id are required")
+        if provider_name and model_id:
+            resolved_resource_id = _resource_id(provider_name, model_id)
+            resolved_route_id = resolved_route_id or _resolve_local_route_id(provider_name, model_id)
+
+    payload = _load_invalid_resources()
+    existing = payload.get("data", [])
+    next_data = [
+        item
+        for item in existing
+        if not (
+            isinstance(item, dict)
+            and (
+                item.get("resource_id") == resolved_resource_id
+                or (resolved_route_id and item.get("route_id") == resolved_route_id)
+            )
+        )
+    ]
+    if len(next_data) == len(existing):
+        raise HTTPException(status_code=404, detail="Invalid resource not found")
+    payload["data"] = next_data
+    saved = _save_invalid_resources(payload)
+    await _sync_p2p_route_catalog(reason=f"invalid_resource_removed:{resolved_route_id or resolved_resource_id}")
+    return {
+        "status": "ok",
+        "removed_resource_id": resolved_resource_id,
+        "removed_route_id": resolved_route_id or None,
+        "invalid_resources": saved,
+    }
+
+
 @router.get("/admin/dispatcher/cache", tags=["Admin"])
 async def get_dispatcher_cache() -> dict:
     return await _refresh_admin_cache_async()
@@ -1275,7 +1766,13 @@ async def refresh_limits_health(started_by: str = Query(default="manual")) -> di
 @router.get("/v1/models", tags=["Models"])
 async def get_models() -> dict:
     try:
-        return await provider_router.get_models()
+        payload = await provider_router.get_models()
+        payload["data"] = [
+            model
+            for model in payload.get("data", [])
+            if isinstance(model, dict) and not _is_invalid_resource(str(model.get("provider") or ""), str(model.get("id") or ""))
+        ]
+        return payload
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except UpstreamProvidersExhausted as exc:
@@ -1287,23 +1784,36 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
     effective_request = request
     requested_provider_auto = _is_auto_value(request.provider)
     requested_model_auto = _is_auto_value(request.model)
+    selected_route: dict[str, str | bool | int | None] | None = None
 
     if requested_provider_auto or requested_model_auto:
         candidate_models = _runtime_chat_models()
-        selected_route = _pick_auto_route(
-            candidate_models,
-            requested_provider=request.provider,
-            requested_model=request.model,
-        )
+        selected_route = _pick_auto_route(candidate_models, request)
         if not selected_route:
             raise HTTPException(status_code=404, detail="No available provider/model route for requested auto selection")
 
         update_payload = {}
         if requested_provider_auto:
-            update_payload["provider"] = selected_route["provider"]
+            update_payload["provider"] = str(selected_route["provider"])
         if requested_model_auto:
-            update_payload["model"] = selected_route["model"]
+            update_payload["model"] = str(selected_route["model"])
         effective_request = request.model_copy(update=update_payload)
+
+    if _is_invalid_resource(effective_request.provider, effective_request.model):
+        invalid_item = _find_invalid_resource(effective_request.provider, effective_request.model)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "invalid_resource",
+                "provider": effective_request.provider,
+                "model": effective_request.model,
+                "route_id": invalid_item.get("route_id"),
+                "reason": invalid_item.get("reason"),
+                "status_code": invalid_item.get("status_code"),
+                "arrested_at": invalid_item.get("arrested_at"),
+                "invalid_until": invalid_item.get("invalid_until"),
+            },
+        )
 
     try:
         response = await provider_router.race_chat_completion(effective_request)
@@ -1315,9 +1825,12 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
             response["_proxy"]["requested_model"] = request.model
             response["_proxy"]["auto_selected_provider"] = effective_request.provider
             response["_proxy"]["auto_selected_model"] = effective_request.model
-            response["_proxy"]["selected_policy"] = (
-                "recommendations" if effective_request.provider and effective_request.model else "fastest_fallback"
-            )
+            response["_proxy"]["resource_affinity"] = _normalize_resource_affinity(request.resource_affinity)
+            response["_proxy"]["selected_resource_id"] = (selected_route or {}).get("resource_id")
+            response["_proxy"]["sticky_reused"] = bool((selected_route or {}).get("sticky_reused"))
+            response["_proxy"]["client_id"] = (selected_route or {}).get("client_id")
+            response["_proxy"]["eligible_resources"] = (selected_route or {}).get("eligible_resources")
+            response["_proxy"]["selected_policy"] = (selected_route or {}).get("selection_policy") or "coldest_eligible_round_robin"
         await _refresh_admin_cache_async()
         return response
     except ValueError as exc:

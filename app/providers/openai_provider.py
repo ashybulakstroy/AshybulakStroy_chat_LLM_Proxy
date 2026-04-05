@@ -57,11 +57,22 @@ class OpenAIProvider(ProviderBase):
                 return response.json()
             except httpx.HTTPStatusError:
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-                rate_limit_store.record_error(
+                quarantine_activated = rate_limit_store.record_error(
                     provider=self.provider_name,
                     status_code=response.status_code,
                     detail=response.text,
                 )
+                if quarantine_activated:
+                    try:
+                        from app.p2p_service import p2p_service
+
+                        await p2p_service.sync_local_route_catalog(reason=f"provider_quarantine:{self.provider_name}")
+                    except Exception:
+                        self.logger.exception(
+                            "provider_quarantine_p2p_sync_failed provider=%s status_code=%s",
+                            self.provider_name,
+                            response.status_code,
+                        )
                 if settings.ENABLE_PROVIDER_LOG:
                     self.logger.exception(
                         "provider_request_http_error provider=%s method=%s endpoint=%s status_code=%s duration_ms=%s response_body=%s",
