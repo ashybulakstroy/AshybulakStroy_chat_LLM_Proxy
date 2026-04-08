@@ -1,166 +1,266 @@
-# Техническое задание: AshybulakStroy AI HUB
+﻿# Техническая спецификация: AshybulakStroy AI HUB
 
-## Цель
+## Назначение
 
-Построить OpenAI-совместимый LLM proxy, который:
+Проект реализует локальный OpenAI-compatible LLM proxy с несколькими upstream-провайдерами и отдельным P2P debug-слоем.
 
-- принимает унифицированные API-запросы
-- маршрутизирует их к нескольким upstream-провайдерам
-- показывает живое состояние ресурсов в админке
-- служит основой для будущей P2P-сети
+Текущие цели:
 
-## Основные функции
+- выполнять локальные LLM-запросы через единый API
+- выбирать ресурс исполнения по runtime-состоянию
+- отслеживать лимиты и ошибки провайдеров
+- поддерживать sticky-affinity клиента к ресурсу
+- готовить почву для P2P orchestration
 
-1. LLM proxy
-   - `/v1/chat/completions`
-   - `/v1/embeddings`
-   - `/v1/models`
+## Реализованные HTTP endpoints
 
-2. Мультипровайдерность
-   - Groq
-   - OpenRouter
-   - Cerebras
-   - Gemini
-   - SambaNova
-   - EdenAI
-   - Fireworks
+### Health
 
-3. Живая телеметрия
-   - live-limit probe
-   - remaining RPM / RPD / TPM
-   - last error
-   - last observed timestamps
+- `GET /health`
+- `GET /health/limits`
+- `POST /health/limits/live`
+- `GET /health/limits/live/status`
 
-4. Основная админка
-   - обзор по сервису
-   - Block #2 с локальными LLM-ресурсами
-   - блок рекомендаций
-   - блок истории proxy-сессий
+### Models / Chat / Embeddings
 
-5. P2P debug admin
-   - network map
-   - known peers
-   - routing table
-   - dispatch preview
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- `POST /v1/embeddings`
 
-## Текущая архитектура
+### Admin
 
-### Локальный proxy
+- `GET /admin`
+- `GET /admin/dispatcher/cache`
+- `GET /admin/dispatcher/status`
+- `GET /admin/models/available`
+- `GET /admin/models/validated-llm`
+- `POST /admin/models/validate-remaining-llm`
+- `GET /admin/models/validate-remaining-llm/status`
 
-- `app/main.py` — старт FastAPI
-- `app/routes.py` — HTTP endpoints и runtime orchestration
-- `app/router_service.py` — dispatch к upstream providers
-- `app/providers/openai_provider.py` — OpenAI-compatible transport
-- `app/rate_limits.py` — live rate-limit state
-- `app/admin_ui.py` — основная админка
+### P2P Admin
 
-### P2P MVP
+- `GET /admin/p2p`
+- `GET /admin/p2p/status`
+- `GET /admin/p2p/peers`
+- `POST /admin/p2p/config`
+- `POST /admin/p2p/peers/heartbeat`
+- `POST /admin/p2p/sessions`
+- `POST /admin/p2p/nodes/remove`
+- `POST /admin/p2p/dispatch/preview`
 
-- `app/p2p_service.py` — P2P runtime state и route logic
-- `app/p2p_admin_ui.py` — P2P debug admin
+## Основные модули
 
-## Логика локального выбора LLM-ресурса
+- [app/main.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\main.py)
+  - старт FastAPI
+  - startup orchestration
+- [app/routes.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\routes.py)
+  - HTTP endpoints
+  - runtime orchestration
+  - invalid resources
+  - response type validation
+- [app/router_service.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\router_service.py)
+  - локальный provider dispatcher
+  - history / active sessions
+- [app/providers/openai_provider.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\providers\openai_provider.py)
+  - OpenAI-compatible upstream transport
+- [app/rate_limits.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\rate_limits.py)
+  - runtime state лимитов
+- [app/admin_ui.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\admin_ui.py)
+  - основная админка
+- [app/p2p_service.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\p2p_service.py)
+  - P2P runtime state
+  - peer registry
+  - route registry
 
-### Старый слой
+## Локальный ресурс исполнения
 
-Старый слой сохраняется как фильтр пригодных ресурсов:
+Единица локального исполнения:
 
-- validation
-- live limits
-- last error
-- runtime/admin filtering
+`resource = provider + model`
 
-### Новый слой
+Это не абстрактная модель, а конкретный локальный кандидат для выполнения запроса.
 
-Новый слой работает поверх уже пригодных ресурсов.
+Основная локальная ресурсная витрина:
 
-Для `provider=auto` и `model=auto`:
+- `Block #2` основной админки
 
-1. Строится пул пригодных `provider + model`
-2. Отсекаются ресурсы:
-   - с недавней ошибкой
-   - без remaining RPM
-3. Применяется cold-resource scheduling:
-   - меньше недавних вызовов лучше
-   - более старое последнее использование лучше
-   - разнообразие провайдеров лучше
-4. `round-robin` используется только среди равных кандидатов
+Дополнительный validated LLM pool:
 
-## Sticky affinity
+- `Block #4`
 
-В `ChatCompletionRequest` добавлено поле:
+Локальный union этих двух наборов должен рассматриваться как полный локальный ресурсный inventory ноды.
 
-```json
-{
-  "resource_affinity": "auto | sticky"
-}
-```
+## Логика выбора ресурса для LLM
 
-Если клиент передает:
+### Входные параметры клиента
 
-```json
-{
-  "provider": "auto",
-  "model": "auto",
-  "resource_affinity": "sticky",
-  "metadata": {
-    "client_id": "user-123"
-  }
-}
-```
+В `ChatCompletionRequest` поддерживаются:
 
-то сервис:
+- `provider`
+- `model`
+- `resource_affinity`
+- `response_type`
+- `metadata`
 
-- сохраняет внутреннюю привязку `client_id -> resource`
-- повторно использует тот же ресурс при следующем запросе
-- перепривязывает клиента, если старый ресурс перестал быть пригодным
+### Resource affinity
 
-## Block #2
+Поддерживаются:
 
-Block #2 основной админки — это:
+- `auto`
+- `sticky`
 
-`Local Executable LLM Resource Inventory`
+`sticky` опирается на:
 
-То есть локальная таблица ресурсов исполнения:
+- `metadata.client_id`
 
-- каждая строка = `provider + model`
-- каждый такой ресурс может принять локальный LLM-запрос
+Если у клиента уже есть привязка к ресурсу и ресурс еще пригоден, диспетчер повторно использует его.
 
-## P2P route model
+### Response type
 
-P2P использует отдельную сетевую сущность маршрута:
+Поддерживаются:
+
+- `json`
+- `text`
+- `audio`
+- `video`
+
+По умолчанию:
+
+- `json`
+
+После получения ответа upstream сервис валидирует фактический тип ответа.
+
+Если тип не соответствует ожидаемому:
+
+- при auto-dispatch ресурс помечается как bad candidate
+- ресурс арестуется как invalid
+- диспетчер пробует следующий ресурс
+- при исчерпании кандидатов возвращается `response_type_mismatch_exhausted`
+
+### Auto-dispatch
+
+Для `provider=auto` и `model=auto` работает новый слой отбора поверх старого фильтра пригодности.
+
+Приоритеты отбора:
+
+1. ресурс пригоден
+2. нет недавней ошибки
+3. есть remaining RPM
+4. более старое последнее использование
+5. меньшее число недавних вызовов
+6. bonus за разнообразие провайдеров
+7. `round-robin` только среди равных
+
+Это не жесткий круг по таблице. Это cold-resource scheduling с fair tie-break.
+
+## Invalid resources
+
+Файл:
+
+- [invalid_resources.json](C:\Work\Projects\Prj_8_LLM_Proxy\invalid_resources.json)
+
+Используется для:
+
+- исключения плохих ресурсов из локального dispatch
+- quarantine после временных ошибок
+- quarantine после mismatch response type
+- отображения в `Block #6`
+- фильтрации локальных P2P route catalogs
+
+## Session history
+
+`Block #5` строится из completed session history локального dispatcher-а.
+
+Сейчас в UI:
+
+- время старта показывается в `GMT+5`
+- вместо “завершено” показывается длительность в секундах
+- ошибки должны подсвечиваться как error rows
+
+## Grouped LLM validation
+
+Validation remaining LLM выполняется группами по имени модели:
+
+1. берется весь список доступных моделей
+2. исключаются non-LLM
+3. модели группируются по `model_id`
+4. группы сортируются
+5. внутри группы запросы к провайдерам идут параллельно
+6. между группами выдерживается пауза
+
+Приоритет порядка:
+
+- сначала LLM из `Block #2`
+- затем остальные LLM
+
+## P2P MVP
+
+### Роли ноды
+
+- `peer`
+- `master`
+- `master_cache`
+- `auto`
+
+### Маршрут P2P
+
+Сетевая единица:
 
 - `route_id = sha256(api_key + provider + model)[:12]`
+
+Дополнительные признаки:
+
 - `route_status`
 - `direct_provider_access`
 - `link-only`
-- `slots`
+- `health_score`
+- `available_slots_per_minute`
 
-### TTL
+### TTL маршрута
 
-Для нерабочих маршрутов:
+Настройка:
 
-- `P2P_ROUTE_TTL_MIN = 1440`
+- `P2P_ROUTE_TTL_MIN`
 
-После истечения TTL невалидный маршрут удаляется из P2P route registry.
+Если маршрут не рабочий и TTL истек, маршрут удаляется из route registry.
 
 ### Slots
 
-Слоты считаются как:
+Текущая формула:
 
 `ceil(P2P_MAX_SHARED_SLOTS_PER_MIN / resources_in_node)`
 
-## Ограничения текущего MVP
+### Что уже есть
 
-- P2P remote execution еще не реализован
-- peer authentication еще не реализован
-- signal server и mDNS еще не реализованы
-- sticky-affinity сейчас опирается на `metadata.client_id`
+- peer registry
+- known peers
+- master snapshot
+- route hashing
+- route TTL pruning
+- network map
+- routing table
+- dispatch preview
 
-## Следующие шаги
+### Что еще не доведено
 
-1. Добавить проверку `response_type` (`json`, `text`, `audio`, `video`)
-2. При mismatch response type помечать ресурс как ошибочный и переходить к следующему
-3. Добавить TTL/наблюдаемость для sticky bindings
-4. Довести P2P до полноценного remote execution
-5. Написать автотесты на scheduler и affinity
+- полноценный remote execution между peer-узлами
+- production-grade auth между нодами
+- signal server / mDNS
+
+## Основные ограничения текущей версии
+
+- основная админка и P2P админка местами еще расходятся по представлению счетчиков
+- часть UI еще требует полной очистки по UTF-8 строкам
+- sticky-affinity живет в памяти процесса
+- live server на `8800` иногда держит старый reload worker дольше ожидаемого
+
+## Следующие инженерные шаги
+
+1. Закрыть расхождения счетчиков `admin` vs `p2p`
+2. Полностью очистить UTF-8 в UI-строках
+3. Добавить тесты на:
+   - auto scheduler
+   - sticky affinity
+   - response_type fallback
+   - invalid resource quarantine
+4. Довести P2P dispatch до реального remote execution

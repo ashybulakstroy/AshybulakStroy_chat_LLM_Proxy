@@ -128,7 +128,15 @@ def _save_admin_cache(payload: dict) -> None:
 
 
 def _empty_invalid_resources_payload() -> dict:
-    return {"object": "list", "data": [], "meta": {"updated_at": None, "total": 0}}
+    return {
+        "object": "list",
+        "data": [],
+        "meta": {
+            "updated_at": None,
+            "total": 0,
+            "temporary_backoff": {},
+        },
+    }
 
 
 def _load_invalid_resources() -> dict:
@@ -144,18 +152,20 @@ def _load_invalid_resources() -> dict:
     payload.setdefault("data", [])
     payload.setdefault("meta", {})
     payload["meta"].setdefault("updated_at", None)
+    payload["meta"].setdefault("temporary_backoff", {})
     payload["meta"]["total"] = len(payload.get("data", []))
     return payload
 
 
 def _save_invalid_resources(payload: dict) -> dict:
+    meta = dict(payload.get("meta", {}))
+    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+    meta["total"] = len(payload.get("data", []))
+    meta["temporary_backoff"] = dict(meta.get("temporary_backoff", {}))
     normalized = {
         "object": "list",
         "data": list(payload.get("data", [])),
-        "meta": {
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "total": len(payload.get("data", [])),
-        },
+        "meta": meta,
     }
     INVALID_RESOURCES_FILE.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return normalized
@@ -197,11 +207,17 @@ def _active_invalid_resource_entries() -> list[dict]:
     return active
 
 
+def _is_blocking_invalid_entry(item: dict[str, Any] | None) -> bool:
+    if not isinstance(item, dict):
+        return False
+    return bool(item.get("blocking", True))
+
+
 def _invalid_resource_index() -> dict[str, dict]:
     return {
         str(item.get("resource_id") or ""): item
         for item in _active_invalid_resource_entries()
-        if item.get("resource_id")
+        if item.get("resource_id") and _is_blocking_invalid_entry(item)
     }
 
 
@@ -209,7 +225,7 @@ def _invalid_route_id_index() -> dict[str, dict]:
     return {
         str(item.get("route_id") or ""): item
         for item in _active_invalid_resource_entries()
-        if item.get("route_id")
+        if item.get("route_id") and _is_blocking_invalid_entry(item)
     }
 
 
@@ -233,6 +249,251 @@ def _find_invalid_resource(provider_name: str | None, model_id: str | None) -> d
         if item:
             return item
     return {}
+
+
+def _normalize_response_type(value: str | None) -> str:
+    cleaned = str(value or "json").strip().lower()
+    if cleaned in {"json", "text", "audio", "video"}:
+        return cleaned
+    return "json"
+
+
+def _is_retryable_auto_dispatch_status(status_code: int | None) -> bool:
+    if status_code is None:
+        return True
+    if status_code in {401, 402, 403, 408, 409, 425, 429}:
+        return True
+    return 500 <= status_code <= 599
+
+
+def _should_retry_auto_dispatch(errors: list[dict[str, Any]]) -> bool:
+    if not errors:
+        return False
+    retryable_errors = [error for error in errors if isinstance(error, dict)]
+    if not retryable_errors:
+        return False
+    return all(_is_retryable_auto_dispatch_status(error.get("status_code")) for error in retryable_errors)
+
+
+def _is_temporary_resource_error_status(status_code: int | None) -> bool:
+    if status_code is None:
+        return True
+    if status_code in {408, 409, 425, 429}:
+        return True
+    return 500 <= status_code <= 599
+
+
+def _should_temporarily_quarantine_resource(errors: list[dict[str, Any]]) -> bool:
+    if not errors:
+        return False
+    temporary_errors = [error for error in errors if isinstance(error, dict)]
+    if not temporary_errors:
+        return False
+    return all(_is_temporary_resource_error_status(error.get("status_code")) for error in temporary_errors)
+
+
+def _temporary_backoff_key(provider_name: str, model_id: str, route_id: str | None = None) -> str:
+    cleaned_route_id = str(route_id or "").strip()
+    if cleaned_route_id:
+        return cleaned_route_id
+    return _resource_id(provider_name, model_id)
+
+
+def _temporary_error_reason(status_code: int | None, detail: str | None) -> str:
+    suffix = ""
+    raw_detail = str(detail or "").strip()
+    if raw_detail:
+        try:
+            parsed = json.loads(raw_detail)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            code = parsed.get("code") or ((parsed.get("error") or {}).get("code") if isinstance(parsed.get("error"), dict) else None)
+            error_type = parsed.get("type") or ((parsed.get("error") or {}).get("type") if isinstance(parsed.get("error"), dict) else None)
+            message = parsed.get("message") or ((parsed.get("error") or {}).get("message") if isinstance(parsed.get("error"), dict) else None)
+            suffix = str(code or error_type or message or "").strip()
+        else:
+            suffix = raw_detail[:80]
+    if suffix:
+        return f"temporary_upstream_error:{status_code or 'network'}:{suffix}"
+    return f"temporary_upstream_error:{status_code or 'network'}"
+
+
+def _extract_assistant_content(response: dict[str, Any]) -> Any:
+    choices = response.get("choices", [])
+    if choices and isinstance(choices[0], dict):
+        message = choices[0].get("message") or {}
+        if isinstance(message, dict):
+            return message.get("content")
+    return None
+
+
+def _response_supports_type(response: dict[str, Any], expected_type: str) -> bool:
+    expected = _normalize_response_type(expected_type)
+    content = _extract_assistant_content(response)
+    message = ((response.get("choices") or [{}])[0].get("message") or {}) if isinstance((response.get("choices") or [{}])[0], dict) else {}
+
+    if expected == "json":
+        return isinstance(response, dict)
+
+    if expected == "text":
+        return isinstance(content, str) and bool(content.strip())
+
+    if expected == "audio":
+        if "audio" in response or "audio_url" in response:
+            return True
+        if isinstance(message, dict) and ("audio" in message or "audio_url" in message):
+            return True
+        if isinstance(content, dict) and ("audio" in content or content.get("type") == "audio"):
+            return True
+        if isinstance(content, list):
+            return any(isinstance(item, dict) and (item.get("type") == "audio" or "audio_url" in item) for item in content)
+        return False
+
+    if expected == "video":
+        if "video" in response or "video_url" in response:
+            return True
+        if isinstance(message, dict) and ("video" in message or "video_url" in message):
+            return True
+        if isinstance(content, dict) and ("video" in content or content.get("type") == "video"):
+            return True
+        if isinstance(content, list):
+            return any(isinstance(item, dict) and (item.get("type") == "video" or "video_url" in item) for item in content)
+        return False
+
+    return False
+
+
+async def _arrest_invalid_resource(
+    provider_name: str,
+    model_id: str,
+    *,
+    reason: str,
+    status_code: int | None = None,
+    source: str = "system",
+    invalid_minutes: int = 60,
+    sync_p2p: bool = True,
+    blocking: bool = True,
+) -> dict:
+    payload = _load_invalid_resources()
+    resource_id = _resource_id(provider_name, model_id)
+    resolved_route_id = _resolve_local_route_id(provider_name, model_id)
+    arrested_at = datetime.now(timezone.utc).isoformat()
+    invalid_until = (datetime.now(timezone.utc) + timedelta(minutes=max(1, invalid_minutes))).isoformat()
+    next_item = {
+        "resource_id": resource_id,
+        "provider": provider_name,
+        "model": model_id,
+        "route_id": resolved_route_id,
+        "reason": reason,
+        "status_code": status_code,
+        "source": source,
+        "blocking": blocking,
+        "arrested_at": arrested_at,
+        "invalid_until": invalid_until,
+    }
+    data = [
+        item
+        for item in payload.get("data", [])
+        if isinstance(item, dict)
+        and not (
+            not _is_blocking_invalid_entry(item)
+            and item.get("resource_id") == resource_id
+            and (not resolved_route_id or item.get("route_id") == resolved_route_id)
+        )
+    ]
+    data.append(next_item)
+    payload["data"] = sorted(data, key=lambda item: str(item.get("arrested_at") or ""), reverse=True)
+    _save_invalid_resources(payload)
+    if sync_p2p:
+        await _sync_p2p_route_catalog(reason=f"invalid_resource_added:{resolved_route_id or resource_id}")
+    return next_item
+
+
+async def _record_resource_issue(
+    provider_name: str,
+    model_id: str,
+    *,
+    reason: str,
+    status_code: int | None = None,
+    source: str,
+    detail: str | None = None,
+    route_id: str | None = None,
+) -> dict:
+    payload = _load_invalid_resources()
+    resource_id = _resource_id(provider_name, model_id)
+    resolved_route_id = str(route_id or "").strip() or _resolve_local_route_id(provider_name, model_id)
+    observed_at = datetime.now(timezone.utc).isoformat()
+    next_item = {
+        "resource_id": resource_id,
+        "provider": provider_name,
+        "model": model_id,
+        "route_id": resolved_route_id,
+        "reason": reason,
+        "status_code": status_code,
+        "source": source,
+        "blocking": False,
+        "arrested_at": observed_at,
+        "invalid_until": None,
+        "detail": " ".join(str(detail or "").split())[:500],
+    }
+    data = [
+        item
+        for item in payload.get("data", [])
+        if isinstance(item, dict)
+        and item.get("resource_id") != resource_id
+        and (not resolved_route_id or item.get("route_id") != resolved_route_id)
+    ]
+    data.append(next_item)
+    payload["data"] = sorted(data, key=lambda item: str(item.get("arrested_at") or ""), reverse=True)
+    _save_invalid_resources(payload)
+    return next_item
+
+
+async def _arrest_temporary_resource(
+    provider_name: str,
+    model_id: str,
+    *,
+    reason: str,
+    status_code: int | None = None,
+    detail: str | None = None,
+    route_id: str | None = None,
+) -> dict:
+    payload = _load_invalid_resources()
+    resolved_route_id = str(route_id or "").strip() or _resolve_local_route_id(provider_name, model_id)
+    backoff_key = _temporary_backoff_key(provider_name, model_id, resolved_route_id)
+    temporary_backoff = dict((payload.get("meta") or {}).get("temporary_backoff", {}))
+    previous_minutes = int(temporary_backoff.get(backoff_key) or 0)
+    next_minutes = max(10, previous_minutes * 2 if previous_minutes else 10)
+    temporary_backoff[backoff_key] = next_minutes
+    payload.setdefault("meta", {})
+    payload["meta"]["temporary_backoff"] = temporary_backoff
+    item = await _arrest_invalid_resource(
+        provider_name,
+        model_id,
+        reason=reason,
+        status_code=status_code,
+        source="temporary_quarantine",
+        invalid_minutes=next_minutes,
+        sync_p2p=False,
+        blocking=True,
+    )
+    payload = _load_invalid_resources()
+    payload.setdefault("meta", {})
+    payload["meta"]["temporary_backoff"] = temporary_backoff
+    _save_invalid_resources(payload)
+    provider_router.logger.warning(
+        "resource_temporary_quarantine provider=%s model=%s route_id=%s status_code=%s minutes=%s reason=%s detail=%s",
+        provider_name,
+        model_id,
+        resolved_route_id,
+        status_code,
+        next_minutes,
+        reason,
+        " ".join(str(detail or "").split())[:300],
+    )
+    await _sync_p2p_route_catalog(reason=f"temporary_quarantine:{resolved_route_id or _resource_id(provider_name, model_id)}")
+    return item
 
 
 async def _sync_p2p_route_catalog(reason: str) -> dict[str, Any]:
@@ -1121,8 +1382,10 @@ def _select_round_robin_candidate(candidates: list[dict], tie_key: tuple) -> dic
 def _pick_auto_route(
     chat_models: list[dict],
     request: ChatCompletionRequest,
+    excluded_resource_ids: set[str] | None = None,
 ) -> dict[str, str | bool | int | None] | None:
     _prune_auto_resource_state()
+    excluded_resource_ids = excluded_resource_ids or set()
 
     requested_provider = request.provider
     requested_model = request.model
@@ -1189,6 +1452,8 @@ def _pick_auto_route(
             continue
 
         resource_id = _build_resource_id(provider_name, model_id)
+        if resource_id in excluded_resource_ids:
+            continue
         recent_request_count = _resource_recent_request_count(resource_id)
         last_used_ts = _resource_last_used_ts(resource_id)
         same_provider_penalty = 0
@@ -1497,6 +1762,7 @@ async def add_invalid_resource(
     status_code: int | None = Query(default=None),
     invalid_days: int | None = Query(default=None),
     source: str = Query(default="manual"),
+    blocking: bool = Query(default=True),
 ) -> dict:
     provider_name = provider_name.strip()
     model_id = model_id.strip()
@@ -1519,6 +1785,7 @@ async def add_invalid_resource(
         "reason": reason,
         "status_code": status_code,
         "source": source,
+        "blocking": blocking,
         "arrested_at": arrested_at,
         "invalid_until": invalid_until,
     }
@@ -1781,45 +2048,185 @@ async def get_models() -> dict:
 
 @router.post("/v1/chat/completions", tags=["Chat"])
 async def create_chat_completion(request: ChatCompletionRequest) -> dict:
-    effective_request = request
     requested_provider_auto = _is_auto_value(request.provider)
     requested_model_auto = _is_auto_value(request.model)
-    selected_route: dict[str, str | bool | int | None] | None = None
+    expected_response_type = _normalize_response_type(getattr(request, "response_type", None))
+    candidate_models = _runtime_chat_models() if (requested_provider_auto or requested_model_auto) else []
+    excluded_resource_ids: set[str] = set()
+    last_selected_route: dict[str, str | bool | int | None] | None = None
+    mismatch_errors: list[dict[str, Any]] = []
+    dispatch_retry_errors: list[dict[str, Any]] = []
 
-    if requested_provider_auto or requested_model_auto:
-        candidate_models = _runtime_chat_models()
-        selected_route = _pick_auto_route(candidate_models, request)
-        if not selected_route:
-            raise HTTPException(status_code=404, detail="No available provider/model route for requested auto selection")
+    while True:
+        effective_request = request
+        selected_route: dict[str, str | bool | int | None] | None = None
 
-        update_payload = {}
-        if requested_provider_auto:
-            update_payload["provider"] = str(selected_route["provider"])
-        if requested_model_auto:
-            update_payload["model"] = str(selected_route["model"])
-        effective_request = request.model_copy(update=update_payload)
+        if requested_provider_auto or requested_model_auto:
+            selected_route = _pick_auto_route(candidate_models, request, excluded_resource_ids=excluded_resource_ids)
+            last_selected_route = selected_route
+            if not selected_route:
+                detail: Any = "No available provider/model route for requested auto selection"
+                if mismatch_errors:
+                    detail = {
+                        "error": "response_type_mismatch_exhausted",
+                        "expected_response_type": expected_response_type,
+                        "attempts": mismatch_errors,
+                    }
+                elif dispatch_retry_errors:
+                    detail = {
+                        "error": "auto_route_exhausted",
+                        "attempts": dispatch_retry_errors,
+                        "last_selected_route": last_selected_route,
+                    }
+                raise HTTPException(status_code=404 if not (mismatch_errors or dispatch_retry_errors) else 502, detail=detail)
 
-    if _is_invalid_resource(effective_request.provider, effective_request.model):
-        invalid_item = _find_invalid_resource(effective_request.provider, effective_request.model)
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "invalid_resource",
-                "provider": effective_request.provider,
-                "model": effective_request.model,
-                "route_id": invalid_item.get("route_id"),
-                "reason": invalid_item.get("reason"),
-                "status_code": invalid_item.get("status_code"),
-                "arrested_at": invalid_item.get("arrested_at"),
-                "invalid_until": invalid_item.get("invalid_until"),
-            },
-        )
+            update_payload = {}
+            if requested_provider_auto:
+                update_payload["provider"] = str(selected_route["provider"])
+            if requested_model_auto:
+                update_payload["model"] = str(selected_route["model"])
+            effective_request = request.model_copy(update=update_payload)
 
-    try:
-        response = await provider_router.race_chat_completion(effective_request)
+        if _is_invalid_resource(effective_request.provider, effective_request.model):
+            invalid_item = _find_invalid_resource(effective_request.provider, effective_request.model)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "invalid_resource",
+                    "provider": effective_request.provider,
+                    "model": effective_request.model,
+                    "route_id": invalid_item.get("route_id"),
+                    "reason": invalid_item.get("reason"),
+                    "status_code": invalid_item.get("status_code"),
+                    "arrested_at": invalid_item.get("arrested_at"),
+                    "invalid_until": invalid_item.get("invalid_until"),
+                },
+            )
+
+        try:
+            response = await provider_router.race_chat_completion(effective_request)
+        except ValueError as exc:
+            await _refresh_admin_cache_async()
+            raise HTTPException(status_code=400, detail=str(exc))
+        except UpstreamProvidersExhausted as exc:
+            retryable_errors = [error for error in exc.errors if isinstance(error, dict)]
+            if effective_request.provider and effective_request.model and _should_temporarily_quarantine_resource(retryable_errors):
+                first_temporary_error = retryable_errors[0] if retryable_errors else {}
+                await _arrest_temporary_resource(
+                    str(effective_request.provider),
+                    str(effective_request.model),
+                    reason=_temporary_error_reason(
+                        first_temporary_error.get("status_code"),
+                        str(first_temporary_error.get("detail") or ""),
+                    ),
+                    status_code=first_temporary_error.get("status_code"),
+                    detail=str(first_temporary_error.get("detail") or ""),
+                    route_id=_resolve_local_route_id(str(effective_request.provider), str(effective_request.model)),
+                )
+            elif effective_request.provider and effective_request.model:
+                first_non_temporary_error = retryable_errors[0] if retryable_errors else {}
+                await _record_resource_issue(
+                    str(effective_request.provider),
+                    str(effective_request.model),
+                    reason=f"resource_error:{first_non_temporary_error.get('status_code') or 'unknown'}",
+                    status_code=first_non_temporary_error.get("status_code"),
+                    source="error_observation",
+                    detail=str(first_non_temporary_error.get("detail") or ""),
+                    route_id=_resolve_local_route_id(str(effective_request.provider), str(effective_request.model)),
+                )
+                provider_router.logger.warning(
+                    "resource_not_quarantined provider=%s model=%s route_id=%s status_code=%s reason=non_temporary_error detail=%s",
+                    effective_request.provider,
+                    effective_request.model,
+                    _resolve_local_route_id(str(effective_request.provider), str(effective_request.model)),
+                    first_non_temporary_error.get("status_code"),
+                    " ".join(str(first_non_temporary_error.get("detail") or "").split())[:300],
+                )
+            if (requested_provider_auto or requested_model_auto) and selected_route and selected_route.get("resource_id"):
+                if _should_retry_auto_dispatch(retryable_errors):
+                    failed_resource_id = str(selected_route["resource_id"])
+                    excluded_resource_ids.add(failed_resource_id)
+                    first_error = retryable_errors[0] if retryable_errors else {}
+                    provider_router.logger.warning(
+                        "resource_problem_detected provider=%s model=%s resource_id=%s status_code=%s detail=%s action=retry_next_resource",
+                        selected_route.get("provider"),
+                        selected_route.get("model"),
+                        failed_resource_id,
+                        first_error.get("status_code"),
+                        " ".join(str(first_error.get("detail") or "").split())[:300],
+                    )
+                    provider_router.logger.warning(
+                        "auto_route_retry provider=%s model=%s resource_id=%s reason=upstream_error errors=%s",
+                        selected_route.get("provider"),
+                        selected_route.get("model"),
+                        failed_resource_id,
+                        retryable_errors,
+                    )
+                    dispatch_retry_errors.extend(retryable_errors)
+                    continue
+            await _refresh_admin_cache_async()
+            if dispatch_retry_errors:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "auto_route_exhausted",
+                        "attempts": dispatch_retry_errors + list(exc.errors),
+                        "last_selected_route": last_selected_route,
+                    },
+                )
+            raise HTTPException(status_code=502, detail=exc.errors)
+
         response.setdefault("_proxy", {})
         response["provider"] = response["_proxy"].get("selected_provider") or effective_request.provider
         response["model"] = response["_proxy"].get("selected_model") or effective_request.model
+        response["_proxy"]["response_type"] = expected_response_type
+
+        if not _response_supports_type(response, expected_response_type):
+            provider_name = str(response["provider"] or effective_request.provider or "")
+            model_id = str(response["model"] or effective_request.model or "")
+            route_id = _resolve_local_route_id(provider_name, model_id)
+            mismatch_reason = f"response_type_mismatch:{expected_response_type}"
+            provider_router.logger.warning(
+                "response_type_mismatch expected=%s provider=%s model=%s route_id=%s auto=%s",
+                expected_response_type,
+                provider_name,
+                model_id,
+                route_id,
+                requested_provider_auto or requested_model_auto,
+            )
+            if requested_provider_auto or requested_model_auto:
+                await _arrest_invalid_resource(
+                    provider_name,
+                    model_id,
+                    reason=mismatch_reason,
+                    source="response_type_validation",
+                    invalid_minutes=60,
+                )
+                if selected_route and selected_route.get("resource_id"):
+                    excluded_resource_ids.add(str(selected_route["resource_id"]))
+                mismatch_errors.append(
+                    {
+                        "provider": provider_name,
+                        "model": model_id,
+                        "route_id": route_id,
+                        "expected_response_type": expected_response_type,
+                        "reason": mismatch_reason,
+                    }
+                )
+                continue
+
+            await _refresh_admin_cache_async()
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "response_type_mismatch",
+                    "expected_response_type": expected_response_type,
+                    "provider": provider_name,
+                    "model": model_id,
+                    "route_id": route_id,
+                },
+            )
+
         if requested_provider_auto or requested_model_auto:
             response["_proxy"]["requested_provider"] = request.provider
             response["_proxy"]["requested_model"] = request.model
@@ -1831,14 +2238,9 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
             response["_proxy"]["client_id"] = (selected_route or {}).get("client_id")
             response["_proxy"]["eligible_resources"] = (selected_route or {}).get("eligible_resources")
             response["_proxy"]["selected_policy"] = (selected_route or {}).get("selection_policy") or "coldest_eligible_round_robin"
+            response["_proxy"]["response_type_retry_count"] = len(mismatch_errors)
         await _refresh_admin_cache_async()
         return response
-    except ValueError as exc:
-        await _refresh_admin_cache_async()
-        raise HTTPException(status_code=400, detail=str(exc))
-    except UpstreamProvidersExhausted as exc:
-        await _refresh_admin_cache_async()
-        raise HTTPException(status_code=502, detail=exc.errors)
 
 
 @router.post("/v1/embeddings", tags=["Embeddings"])

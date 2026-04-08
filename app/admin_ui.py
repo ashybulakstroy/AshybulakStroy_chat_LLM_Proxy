@@ -228,6 +228,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
     }
     tr.warn { background: rgba(250, 204, 21, 0.08); }
     tr.error { background: rgba(248, 113, 113, 0.10); }
+    tr.error td { background: rgba(248, 113, 113, 0.10); }
     tr.trend-up { background: rgba(34, 197, 94, 0.12); }
     tr.trend-down { background: rgba(239, 68, 68, 0.12); }
     .pill {
@@ -1133,12 +1134,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
 
       invalidResourcesNode.querySelectorAll('thead tr').forEach((row) => {
         const headers = row.querySelectorAll('th');
-        if (headers.length === 5) {
+        if (headers.length === 6) {
           headers[0].textContent = t('resource');
           headers[1].textContent = t('code');
           headers[2].textContent = t('reason');
-          headers[3].textContent = t('arrestedAt');
-          headers[4].textContent = t('invalidUntil');
+          headers[3].textContent = t('source');
+          headers[4].textContent = t('arrestedAt');
+          headers[5].textContent = t('invalidUntil');
         }
       });
       invalidResourcesNode.querySelectorAll('.empty').forEach((node) => {
@@ -1201,12 +1203,14 @@ ADMIN_PAGE_HTML = """<!doctype html>
     }
 
     function sessionRowHtml(session) {
+      const statusCode = session.status_code === null || session.status_code === undefined || session.status_code === '' ? '' : String(session.status_code);
+      const rowClass = session.status === 'error' ? ' class="error"' : '';
       return `
-        <tr>
+        <tr${rowClass}>
           <td><span class="pill">${fmt(session.provider)}</span></td>
           <td class="mono">${fmt(session.model)}</td>
           <td>${session.status === 'success' ? t('statusSuccessSession') : session.status === 'error' ? t('statusError') : fmt(session.status)}</td>
-          <td>${fmt(session.status_code)}</td>
+          <td>${statusCode}</td>
           <td class="mono">${fmt(session.started_at)}</td>
           <td class="mono">${fmt(session.finished_at)}</td>
           <td>${fmt(session.mode)}</td>
@@ -1215,12 +1219,14 @@ ADMIN_PAGE_HTML = """<!doctype html>
     }
 
     function historySessionRowHtml(session) {
+      const statusCode = session.status_code === null || session.status_code === undefined || session.status_code === '' ? '' : String(session.status_code);
+      const rowClass = session.status === 'error' ? ' class="error"' : '';
       return `
-        <tr>
+        <tr${rowClass}>
           <td><span class="pill">${fmt(session.provider)}</span></td>
           <td class="mono">${fmt(session.model)}</td>
           <td>${session.status === 'success' ? t('statusSuccessSession') : session.status === 'error' ? t('statusError') : fmt(session.status)}</td>
-          <td>${fmt(session.status_code)}</td>
+          <td>${statusCode}</td>
           <td class="mono">${fmtGmtPlus5(session.started_at)}</td>
           <td class="mono">${fmtDurationSeconds(session.started_at, session.finished_at)}</td>
           <td>${fmt(session.mode)}</td>
@@ -1291,11 +1297,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
     }
 
     function invalidResourceRowHtml(item) {
+      const sourceLabel = item.blocking === false ? `${fmt(item.source)} / observe` : `${fmt(item.source)} / blocking`;
       return `
         <tr>
           <td class="mono">${fmt(item.resource_id)}</td>
           <td>${fmt(item.status_code)}</td>
           <td>${fmt(item.reason)}</td>
+          <td>${sourceLabel}</td>
           <td class="mono">${formatGmtPlus5(item.arrested_at)}</td>
           <td class="mono">${formatGmtPlus5(item.invalid_until)}</td>
         </tr>
@@ -1314,11 +1322,12 @@ ADMIN_PAGE_HTML = """<!doctype html>
                   <th>${t('resource')}</th>
                   <th>${t('code')}</th>
                   <th>${t('reason')}</th>
+                  <th>${t('source')}</th>
                   <th>${t('arrestedAt')}</th>
                   <th>${t('invalidUntil')}</th>
                 </tr>
               </thead>
-              <tbody>${rowsHtml || `<tr><td colspan="5" class="empty">${t('invalidResourcesEmpty')}</td></tr>`}</tbody>
+              <tbody>${rowsHtml || `<tr><td colspan="6" class="empty">${t('invalidResourcesEmpty')}</td></tr>`}</tbody>
             </table>
           </div>
         </section>
@@ -1644,18 +1653,42 @@ ADMIN_PAGE_HTML = """<!doctype html>
       `;
     }
 
+    function resourceKey(item) {
+      const provider = String(item?.provider || '').trim().toLowerCase();
+      const model = String(item?.id || item?.model_id || '').trim();
+      if (!provider || !model) return '';
+      return `${provider}::${model}`;
+    }
+
+    function localResourceUnionCount(localModels, validatedModels) {
+      const combined = [
+        ...(localModels || []),
+        ...(validatedModels || []),
+      ];
+      const seen = new Set();
+      combined.forEach((item) => {
+        const key = resourceKey(item);
+        if (key) seen.add(key);
+      });
+      return seen.size;
+    }
+
     function rerenderFromCache() {
       if (lastDashboardData) {
         const { health, models, estimates, dispatcherCache } = lastDashboardData;
         const routeIndex = Object.fromEntries(
           (dispatcherCache.routes || []).map((route) => [`${route.provider || 'unknown'}::${route.model_id || 'unknown'}`, route])
         );
+        const localResourceCount = localResourceUnionCount(
+          models.data || [],
+          (lastValidatedLlmPayload || {}).data || [],
+        );
         const grouped = { llm: [], audio: [], video: [], other: [] };
         const previousTrendState = getTrendState();
         overviewStats.innerHTML = [
           statCard(t('service'), health.status),
           statCard(t('providers'), health.providers_count),
-          statCard(t('models'), (models.data || []).length, `${t('afterFilter')}: ${fmt(models.meta?.total_before_filter)}`),
+          statCard(t('models'), localResourceCount, `${t('afterFilter')}: ${fmt(models.meta?.total_before_filter)}`),
           statCard(t('lastProbe'), formatGmtPlus5(health.startup_probe?.last_probe_at), `${t('successful')}: ${fmt(health.startup_probe?.summary?.successful?.length || 0)}`)
         ].join('');
         (models.data || []).forEach((model) => {
@@ -1810,12 +1843,14 @@ ADMIN_PAGE_HTML = """<!doctype html>
       recommendationsNode.innerHTML = recommendationCard(t('analyzing'), t('analyzingText'));
       validatedLlmNode.innerHTML = '';
       try {
-        const [health, models, estimates, dispatcherCache] = await Promise.all([
+        const [health, models, estimates, dispatcherCache, validatedPayload] = await Promise.all([
           getJson('/health/limits'),
           getJson('/admin/models/available'),
           getJson('/admin/limits/estimated'),
-          getJson('/admin/dispatcher/cache')
+          getJson('/admin/dispatcher/cache'),
+          getJson('/admin/models/validated-llm'),
         ]);
+        lastValidatedLlmPayload = validatedPayload;
         lastDashboardData = { health, models, estimates, dispatcherCache };
         const routeIndex = Object.fromEntries(
           (dispatcherCache.routes || []).map((route) => [`${route.provider || 'unknown'}::${route.model_id || 'unknown'}`, route])
@@ -1823,10 +1858,14 @@ ADMIN_PAGE_HTML = """<!doctype html>
         const previousTrendState = getTrendState();
         const nextTrendState = {};
 
+        const localResourceCount = localResourceUnionCount(
+          models.data || [],
+          (validatedPayload || {}).data || [],
+        );
         overviewStats.innerHTML = [
           statCard(t('service'), health.status),
           statCard(t('providers'), health.providers_count),
-          statCard(t('models'), (models.data || []).length, `${t('afterFilter')}: ${fmt(models.meta?.total_before_filter)}`),
+          statCard(t('models'), localResourceCount, `${t('afterFilter')}: ${fmt(models.meta?.total_before_filter)}`),
           statCard(t('lastProbe'), formatGmtPlus5(health.startup_probe?.last_probe_at), `${t('successful')}: ${fmt(health.startup_probe?.summary?.successful?.length || 0)}`)
         ].join('');
 

@@ -25,6 +25,11 @@ class ChatCompletionRequest(BaseModel):
         description="Политика привязки клиента к одному и тому же внутреннему ресурсу. 'sticky' старается держать клиента на прежнем provider+model, если ресурс доступен.",
         examples=["auto", "sticky"],
     )
+    response_type: Optional[str] = Field(
+        default="json",
+        description="Ожидаемый тип ответа: json, text, audio, video.",
+        examples=["json", "text", "audio", "video"],
+    )
     metadata: Optional[dict[str, Any]] = None
 
 

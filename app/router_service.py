@@ -208,6 +208,7 @@ class ProviderRouter:
         status = session.get("status") or "unknown"
         provider = session.get("provider") or "unknown"
         model = session.get("model") or "unknown"
+        resource_name = f"{provider}::{model}"
         mode = session.get("mode") or self.proxy_mode
         status_code = session.get("status_code")
         detail = (session.get("detail") or "").strip()
@@ -215,10 +216,11 @@ class ProviderRouter:
 
         if status == "success":
             self.logger.info(
-                "proxy_session_completed status=success mode=%s provider=%s model=%s status_code=%s started_at=%s finished_at=%s",
+                "proxy_session_completed status=success mode=%s provider=%s model=%s resource=%s status_code=%s started_at=%s finished_at=%s",
                 mode,
                 provider,
                 model,
+                resource_name,
                 status_code,
                 session.get("started_at"),
                 session.get("finished_at"),
@@ -226,11 +228,12 @@ class ProviderRouter:
             return
 
         self.logger.warning(
-            "proxy_session_completed status=%s mode=%s provider=%s model=%s status_code=%s detail=%s started_at=%s finished_at=%s",
+            "proxy_session_completed status=%s mode=%s provider=%s model=%s resource=%s status_code=%s detail=%s started_at=%s finished_at=%s",
             status,
             mode,
             provider,
             model,
+            resource_name,
             status_code,
             safe_detail,
             session.get("started_at"),

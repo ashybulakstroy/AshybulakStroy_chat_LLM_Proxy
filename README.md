@@ -1,52 +1,63 @@
-# AshybulakStroy AI HUB
+﻿# AshybulakStroy AI HUB
 
-Легкий OpenAI-совместимый LLM proxy на FastAPI. Сервис объединяет несколько upstream-провайдеров, умеет работать с `chat/completions`, `embeddings` и `models`, ведет живую телеметрию лимитов и дает две админки:
+OpenAI-compatible LLM proxy on FastAPI.
 
-- основную админку локального proxy
-- отдельную P2P debug admin для будущей распределенной сети
+Сервис объединяет несколько upstream-провайдеров, выполняет `chat/completions`, `embeddings` и `models`, ведет живую телеметрию лимитов, показывает локальную админку и отдельную P2P debug-админку.
 
-## Что уже реализовано
+## Реализовано
 
-- `/health` — проверка работоспособности сервиса
-- `/health/limits` — сводка по лимитам провайдеров
-- `/health/limits/live` — фоновое обновление live-лимитов
-- `/v1/models` — список моделей
-- `/v1/chat/completions` — прокси для LLM chat
-- `/v1/embeddings` — прокси для embeddings
-- `/admin` — основная админка
-- `/admin/p2p` — P2P debug admin
+- `GET /health`
+- `GET /health/limits`
+- `POST /health/limits/live`
+- `GET /health/limits/live/status`
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- `POST /v1/embeddings`
+- `GET /admin`
+- `GET /admin/p2p`
 
-## Основная логика proxy
+## Upstream API
 
-Сервис работает с OpenAI-compatible upstream API:
+Прокси сейчас использует только OpenAI-compatible upstream endpoints:
 
 - `GET /models`
 - `POST /chat/completions`
 - `POST /embeddings`
 
-Для LLM-запросов доступны:
+Audio / image / video upstream calls в текущем коде не реализованы как отдельные transport-ветки.
 
-- `provider=auto`
-- `model=auto`
-- `resource_affinity=auto|sticky`
+## Основная логика LLM proxy
 
 ### Auto-маршрутизация
 
-При `provider=auto` и `model=auto` сервис:
+Если клиент передает:
 
-1. Строит пул пригодных `provider + model` ресурсов из текущего runtime/admin filter.
-2. Исключает ресурсы с ошибками и исчерпанными минутными лимитами.
-3. Выбирает более холодный ресурс по сочетанию:
-   - нет недавней ошибки
-   - есть remaining RPM
-   - ресурс использовался реже
-   - ресурс использовался позже всех
-   - есть бонус за разнообразие провайдеров
-4. Применяет `round-robin` только среди равных кандидатов.
+- `provider = auto`
+- `model = auto`
 
-### Sticky resource affinity
+то сервис строит локальный пул пригодных ресурсов `provider + model` и выбирает ресурс по холодности, а не по жесткому фиксированному порядку.
 
-Если клиент присылает:
+Текущий порядок отбора для `auto`:
+
+1. пригодность ресурса
+2. отсутствие недавней ошибки
+3. наличие remaining RPM
+4. более старое последнее использование
+5. меньшее число недавних запросов
+6. бонус за разнообразие провайдеров
+7. `round-robin` только среди равных кандидатов
+
+### Sticky affinity
+
+В `ChatCompletionRequest` поддерживается:
+
+```json
+{
+  "resource_affinity": "auto | sticky"
+}
+```
+
+Если клиент использует:
 
 ```json
 {
@@ -59,62 +70,117 @@
 }
 ```
 
-то proxy старается держать этого клиента на одном и том же внутреннем ресурсе `provider + model`, пока ресурс остается пригодным.
+то сервис старается удерживать этого клиента на одном и том же внутреннем ресурсе, пока ресурс остается пригодным.
 
-В ответе сервис возвращает служебные поля:
+### Response type validation
 
-- `_proxy.selected_resource_id`
-- `_proxy.resource_affinity`
-- `_proxy.sticky_reused`
-- `_proxy.client_id`
-- `_proxy.eligible_resources`
-- `_proxy.selected_policy`
+В `ChatCompletionRequest` поддерживается:
 
-## Block #2 и P2P
+```json
+{
+  "response_type": "json | text | audio | video"
+}
+```
 
-В основной админке `Блок №2` — это локальная таблица исполняемых LLM-ресурсов ноды.
+По умолчанию:
 
-В P2P admin `Маршрутизация` — это уже сетевая маршрутная таблица поверх локальных ресурсов:
+- `response_type = json`
 
-- с `route_id`
-- с `route_status`
-- со слотами
-- с учетом direct/link-only semantics
+После ответа upstream сервис проверяет соответствие фактического типа ответа требуемому типу.
+
+Если ответ не соответствует:
+
+- при `auto` текущий ресурс помечается как ошибочный
+- ресурс попадает в исключение для текущего запроса
+- диспетчер пробует следующий ресурс
+
+Если исчерпаны все кандидаты:
+
+- возвращается ошибка `response_type_mismatch_exhausted`
+
+## Invalid resources
+
+Сервис ведет локальный список ошибочных ресурсов в:
+
+- `invalid_resources.json`
+
+Этот список используется для:
+
+- исключения плохих `provider + model` из локального выбора
+- временной quarantine логики
+- отображения в `Блоке №6` основной админки
+- фильтрации локального route catalog для P2P
+
+## Админка
+
+### Основная админка `/admin`
+
+Основные блоки:
+
+- `Блок №1` — сводка сервиса
+- `Блок №1.5` — активные proxy-сессии
+- `Блок №2` — локальный inventory моделей и лимитов
+- `Блок №3` — рекомендации
+- `Блок №4` — отдельная LLM validation
+- `Блок №5` — история proxy-сессий
+- `Блок №6` — invalid resources
+
+Карточка `Модели` в `Блоке №1` должна трактоваться как локальный union:
+
+- `Block #2`
+- `Block #4`
+
+с дедупликацией по `provider + model`.
+
+### P2P debug admin `/admin/p2p`
+
+Показывает:
+
+- runtime state ноды
+- network map
+- known peers
+- routing table
+- dispatch preview
+- route ids
+- route TTL / pruning
 
 ## P2P MVP
 
-В репозитории уже есть отдельный P2P MVP-слой для будущих ролей `MASTER` и `PEER`.
+Текущий P2P слой уже реализует:
 
-Текущий объем MVP:
-
-- роли ноды:
+- режимы ноды:
   - `peer`
   - `master`
   - `master_cache`
   - `auto`
-- peer registry в памяти
-- heartbeat и known peers
-- network map
-- dispatch preview
-- route hashing:
-  - `route_id = sha256(api_key + provider + model)[:12]`
-- TTL для нерабочих маршрутов:
-  - `P2P_ROUTE_TTL_MIN=1440`
-- direct/link-only классификация
-- P2P logs с префиксом `p2p_...`
+- peer registry
+- heartbeat
+- snapshot сети
+- route hashing
+- route TTL cleanup
+- direct / link-only semantics
+- P2P routing table
+- P2P admin UI
 
-### Slots в P2P
+### Route ID
 
-Слоты сейчас считаются по простой формуле:
+Для прямых локальных маршрутов используется:
+
+`route_id = sha256(api_key + provider + model)[:12]`
+
+### TTL
+
+Для нерабочих маршрутов:
+
+- `P2P_ROUTE_TTL_MIN = 1440`
+
+После истечения TTL невалидный маршрут удаляется из P2P route registry.
+
+### Slots
+
+Слоты в P2P routing table сейчас считаются так:
 
 `ceil(P2P_MAX_SHARED_SLOTS_PER_MIN / resources_in_node)`
-
-### Ключевые P2P endpoint-ы
-
-- `/admin/p2p`
-- `/admin/p2p/status`
-- `/admin/p2p/peers`
-- `/admin/p2p/dispatch/preview`
 
 ## Конфигурация
 
@@ -162,7 +228,7 @@ python -m pip install -r requirements.txt
 python run.py
 ```
 
-После старта полезно проверить:
+Проверка:
 
 ```bash
 curl http://localhost:8800/health
@@ -171,9 +237,13 @@ curl http://localhost:8800/admin
 curl http://localhost:8800/admin/p2p
 ```
 
-## Что дальше
+## Статус проекта
 
-- добавить проверку `response_type` для LLM-запросов
-- расширить sticky-affinity TTL и admin visibility
-- довести P2P до реального remote execution
-- добавить тесты и CI
+Сервис рабочий как локальный LLM proxy.
+
+P2P часть находится на стадии MVP:
+
+- route registry уже есть
+- peer snapshot уже есть
+- network debug admin уже есть
+- remote execution между узлами еще не доведено до production-уровня
