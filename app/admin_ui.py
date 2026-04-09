@@ -129,6 +129,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
       line-height: 1.4;
       margin-top: 4px;
     }
+    .danger-text {
+      color: var(--bad);
+      font-weight: 700;
+      display: block;
+      margin-top: 6px;
+      font-size: 14px;
+    }
     .table-wrap {
       overflow: auto;
       border-radius: 16px;
@@ -229,6 +236,7 @@ ADMIN_PAGE_HTML = """<!doctype html>
     tr.warn { background: rgba(250, 204, 21, 0.08); }
     tr.error { background: rgba(248, 113, 113, 0.10); }
     tr.error td { background: rgba(248, 113, 113, 0.10); }
+    tr.invalid-resource-row td { background: rgba(248, 113, 113, 0.08); }
     tr.trend-up { background: rgba(34, 197, 94, 0.12); }
     tr.trend-down { background: rgba(239, 68, 68, 0.12); }
     .pill {
@@ -1170,13 +1178,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
       const parsed = Date.parse(value);
       if (Number.isNaN(parsed)) return fmt(value);
       const shifted = new Date(parsed + (5 * 60 * 60 * 1000));
-      const yyyy = shifted.getUTCFullYear();
+      const yy = String(shifted.getUTCFullYear()).slice(-2);
       const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
       const dd = String(shifted.getUTCDate()).padStart(2, '0');
       const hh = String(shifted.getUTCHours()).padStart(2, '0');
       const mi = String(shifted.getUTCMinutes()).padStart(2, '0');
       const ss = String(shifted.getUTCSeconds()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} GMT+5`;
+      return `${hh}:${mi}:${ss} ${dd}-${mm}-${yy}`;
     }
 
     function fmtDurationSeconds(startedAt, finishedAt) {
@@ -1202,6 +1210,64 @@ ADMIN_PAGE_HTML = """<!doctype html>
       `;
     }
 
+    function modelsStatExtra(totalBeforeFilter, invalidCount) {
+      const invalidTotal = Number(invalidCount || 0);
+      if (invalidTotal > 0) {
+        return `${t('afterFilter')}: ${fmt(totalBeforeFilter)}<br><span class="danger-text">В карантине: ${fmt(invalidTotal)}</span>`;
+      }
+      return `${t('afterFilter')}: ${fmt(totalBeforeFilter)}`;
+    }
+
+    function modelsStatCard(value, totalBeforeFilter, invalidCount) {
+      const invalidTotal = Number(invalidCount || 0);
+      return `
+        <div class="stat">
+          <div class="label">${t('models')}</div>
+          <div class="value">${fmt(value)}</div>
+          <div class="sub">${t('afterFilter')}: ${fmt(totalBeforeFilter)}</div>
+          ${invalidTotal > 0 ? `<div class="danger-text">В карантине: ${fmt(invalidTotal)}</div>` : ''}
+        </div>
+      `;
+    }
+
+    function escapeAttr(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function errorCodeLabel(code) {
+      const normalized = String(code ?? '').trim();
+      const map = {
+        '400': 'Bad Request',
+        '401': 'Unauthorized',
+        '402': 'Payment Required',
+        '403': 'Forbidden',
+        '404': 'Not Found',
+        '408': 'Request Timeout',
+        '409': 'Conflict',
+        '410': 'Gone',
+        '413': 'Payload Too Large',
+        '422': 'Unprocessable Entity',
+        '425': 'Too Early',
+        '429': 'Too Many Requests',
+        '500': 'Internal Server Error',
+        '502': 'Bad Gateway',
+        '503': 'Service Unavailable',
+        '504': 'Gateway Timeout',
+      };
+      return map[normalized] || 'HTTP Error';
+    }
+
+    function errorCodeTooltip(session, statusCode) {
+      if (!statusCode) return '';
+      const detail = String(session?.detail || '').trim();
+      const base = `${statusCode} ${errorCodeLabel(statusCode)}`;
+      return detail ? `${base}. ${detail}` : base;
+    }
+
     function sessionRowHtml(session) {
       const statusCode = session.status_code === null || session.status_code === undefined || session.status_code === '' ? '' : String(session.status_code);
       const rowClass = session.status === 'error' ? ' class="error"' : '';
@@ -1220,13 +1286,14 @@ ADMIN_PAGE_HTML = """<!doctype html>
 
     function historySessionRowHtml(session) {
       const statusCode = session.status_code === null || session.status_code === undefined || session.status_code === '' ? '' : String(session.status_code);
-      const rowClass = session.status === 'error' ? ' class="error"' : '';
+      const rowClass = statusCode ? ' class="error"' : session.status === 'error' ? ' class="error"' : '';
+      const codeTitle = statusCode ? ` title="${escapeAttr(errorCodeTooltip(session, statusCode))}"` : '';
       return `
         <tr${rowClass}>
           <td><span class="pill">${fmt(session.provider)}</span></td>
           <td class="mono">${fmt(session.model)}</td>
           <td>${session.status === 'success' ? t('statusSuccessSession') : session.status === 'error' ? t('statusError') : fmt(session.status)}</td>
-          <td>${statusCode}</td>
+          <td${codeTitle}>${statusCode}</td>
           <td class="mono">${fmtGmtPlus5(session.started_at)}</td>
           <td class="mono">${fmtDurationSeconds(session.started_at, session.finished_at)}</td>
           <td>${fmt(session.mode)}</td>
@@ -1299,8 +1366,8 @@ ADMIN_PAGE_HTML = """<!doctype html>
     function invalidResourceRowHtml(item) {
       const sourceLabel = item.blocking === false ? `${fmt(item.source)} / observe` : `${fmt(item.source)} / blocking`;
       return `
-        <tr>
-          <td class="mono">${fmt(item.resource_id)}</td>
+        <tr class="invalid-resource-row">
+          <td class="mono status-error">${fmt(item.resource_id)}</td>
           <td>${fmt(item.status_code)}</td>
           <td>${fmt(item.reason)}</td>
           <td>${sourceLabel}</td>
@@ -1397,8 +1464,9 @@ ADMIN_PAGE_HTML = """<!doctype html>
       if (Number.isNaN(parsed.getTime())) return String(value);
       const shifted = new Date(parsed.getTime() + (5 * 60 * 60 * 1000));
       const pad = (n) => String(n).padStart(2, '0');
-      return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())} ` +
-        `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}`;
+      const yy = String(shifted.getUTCFullYear()).slice(-2);
+      return `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())} ` +
+        `${pad(shifted.getUTCDate())}-${pad(shifted.getUTCMonth() + 1)}-${yy}`;
     }
 
     function eligibilityStatus(liveItem, estimate) {
@@ -1683,12 +1751,13 @@ ADMIN_PAGE_HTML = """<!doctype html>
           models.data || [],
           (lastValidatedLlmPayload || {}).data || [],
         );
+        const invalidResourcesCount = (dispatcherCache.invalid_resources?.data || []).length;
         const grouped = { llm: [], audio: [], video: [], other: [] };
         const previousTrendState = getTrendState();
         overviewStats.innerHTML = [
           statCard(t('service'), health.status),
           statCard(t('providers'), health.providers_count),
-          statCard(t('models'), localResourceCount, `${t('afterFilter')}: ${fmt(models.meta?.total_before_filter)}`),
+          modelsStatCard(localResourceCount, models.meta?.total_before_filter, invalidResourcesCount),
           statCard(t('lastProbe'), formatGmtPlus5(health.startup_probe?.last_probe_at), `${t('successful')}: ${fmt(health.startup_probe?.summary?.successful?.length || 0)}`)
         ].join('');
         (models.data || []).forEach((model) => {
@@ -1862,10 +1931,11 @@ ADMIN_PAGE_HTML = """<!doctype html>
           models.data || [],
           (validatedPayload || {}).data || [],
         );
+        const invalidResourcesCount = (dispatcherCache.invalid_resources?.data || []).length;
         overviewStats.innerHTML = [
           statCard(t('service'), health.status),
           statCard(t('providers'), health.providers_count),
-          statCard(t('models'), localResourceCount, `${t('afterFilter')}: ${fmt(models.meta?.total_before_filter)}`),
+          modelsStatCard(localResourceCount, models.meta?.total_before_filter, invalidResourcesCount),
           statCard(t('lastProbe'), formatGmtPlus5(health.startup_probe?.last_probe_at), `${t('successful')}: ${fmt(health.startup_probe?.summary?.successful?.length || 0)}`)
         ].join('');
 

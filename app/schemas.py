@@ -5,8 +5,10 @@ from pydantic import BaseModel, Field
 
 class Message(BaseModel):
     role: str = Field(..., examples=["user"])
-    content: str = Field(..., examples=["Ассаламу алейкум!"])
+    content: Any = Field(..., examples=["Ассаламу алейкум!"])
     name: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    tool_calls: Optional[list[dict[str, Any]]] = None
 
 
 class ChatCompletionRequest(BaseModel):

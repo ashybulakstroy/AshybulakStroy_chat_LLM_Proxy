@@ -75,6 +75,9 @@ AUTO_RESOURCE_USAGE: dict[str, dict] = {}
 CLIENT_RESOURCE_AFFINITY: dict[str, dict] = {}
 AUTO_RESOURCE_ROUND_ROBIN_CURSOR = 0
 AUTO_LAST_SELECTED_PROVIDER: str | None = None
+REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES = 30
+MODEL_NOT_FOUND_INVALID_MINUTES = 24 * 60
+CREDITS_INVALID_MINUTES = 6 * 60
 
 
 def _set_runtime_dispatcher_cache(payload: dict | None) -> dict:
@@ -258,6 +261,149 @@ def _normalize_response_type(value: str | None) -> str:
     return "json"
 
 
+def _parse_error_detail(detail: str | None) -> tuple[Any, str]:
+    raw_detail = str(detail or "").strip()
+    if not raw_detail:
+        return None, ""
+    try:
+        return json.loads(raw_detail), raw_detail
+    except json.JSONDecodeError:
+        return None, raw_detail
+
+
+def _flatten_error_text(detail: str | None) -> str:
+    parsed, raw_detail = _parse_error_detail(detail)
+    texts: list[str] = []
+
+    def _walk(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            cleaned = " ".join(value.split()).strip()
+            if cleaned:
+                texts.append(cleaned)
+            return
+        if isinstance(value, dict):
+            for key in ("message", "detail", "code", "type", "status", "param", "error"):
+                if key in value:
+                    _walk(value.get(key))
+            for nested in value.values():
+                if isinstance(nested, (dict, list)):
+                    _walk(nested)
+            return
+        if isinstance(value, list):
+            for item in value:
+                _walk(item)
+
+    _walk(parsed)
+    if texts:
+        return " | ".join(texts).lower()
+    return " ".join(raw_detail.split()).lower()
+
+
+def _error_reason_suffix(detail: str | None) -> str:
+    flat = _flatten_error_text(detail)
+    if "tool_call_id" in flat:
+        return "tool_call_id_missing"
+    if "developer instruction" in flat:
+        return "developer_instruction_not_supported"
+    if "roles must alternate" in flat:
+        return "roles_must_alternate"
+    if "last message role must be 'user'" in flat:
+        return "last_role_must_be_user"
+    if "max_tokens" in flat:
+        return "max_tokens_limit"
+    if "not found" in flat:
+        return "not_found"
+    if "not available" in flat or "gone" in flat or "deprecated" in flat:
+        return "gone"
+    if "insufficient credits" in flat or "payment required" in flat:
+        return "credits"
+    return "generic"
+
+
+def _is_request_incompatible_error(status_code: int | None, detail: str | None) -> bool:
+    if status_code not in {400, 404, 410, 422}:
+        return False
+    flat = _flatten_error_text(detail)
+    keywords = (
+        "tool_call_id",
+        "developer instruction is not enabled",
+        "roles must alternate",
+        "last message role must be 'user'",
+        "max_tokens",
+        "wrong_api_format",
+        "validation_error",
+        "jinja template rendering failed",
+    )
+    return any(keyword in flat for keyword in keywords)
+
+
+def _classify_resource_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
+    items = [error for error in errors if isinstance(error, dict)]
+    first = items[0] if items else {}
+    status_code = first.get("status_code")
+    detail = str(first.get("detail") or "")
+    suffix = _error_reason_suffix(detail)
+
+    if items and all(_is_temporary_resource_error_status(item.get("status_code")) for item in items):
+        return {
+            "action": "temporary_quarantine",
+            "reason": _temporary_error_reason(status_code, detail),
+            "status_code": status_code,
+            "detail": detail,
+            "retry_auto": True,
+        }
+
+    if status_code == 402:
+        return {
+            "action": "invalid_resource",
+            "reason": f"provider_credits_exhausted:{suffix}",
+            "status_code": status_code,
+            "detail": detail,
+            "invalid_minutes": CREDITS_INVALID_MINUTES,
+            "retry_auto": True,
+        }
+
+    if status_code == 404:
+        return {
+            "action": "invalid_resource",
+            "reason": f"model_not_found:{suffix}",
+            "status_code": status_code,
+            "detail": detail,
+            "invalid_minutes": MODEL_NOT_FOUND_INVALID_MINUTES,
+            "retry_auto": True,
+        }
+
+    if status_code == 410:
+        return {
+            "action": "invalid_resource",
+            "reason": f"model_gone:{suffix}",
+            "status_code": status_code,
+            "detail": detail,
+            "invalid_minutes": MODEL_NOT_FOUND_INVALID_MINUTES,
+            "retry_auto": True,
+        }
+
+    if _is_request_incompatible_error(status_code, detail):
+        return {
+            "action": "request_incompatible",
+            "reason": f"request_incompatible:{suffix}",
+            "status_code": status_code,
+            "detail": detail,
+            "invalid_minutes": REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES,
+            "retry_auto": True,
+        }
+
+    return {
+        "action": "observe_only",
+        "reason": f"resource_error:{status_code or 'unknown'}",
+        "status_code": status_code,
+        "detail": detail,
+        "retry_auto": False,
+    }
+
+
 def _is_retryable_auto_dispatch_status(status_code: int | None) -> bool:
     if status_code is None:
         return True
@@ -269,6 +415,9 @@ def _is_retryable_auto_dispatch_status(status_code: int | None) -> bool:
 def _should_retry_auto_dispatch(errors: list[dict[str, Any]]) -> bool:
     if not errors:
         return False
+    classification = _classify_resource_error(errors)
+    if classification.get("retry_auto"):
+        return True
     retryable_errors = [error for error in errors if isinstance(error, dict)]
     if not retryable_errors:
         return False
@@ -1203,6 +1352,44 @@ def _filter_models_by_validation(models: list[dict]) -> list[dict]:
     ]
 
 
+def _model_supports_chat(model: dict[str, Any]) -> bool:
+    explicit = model.get("supports_chat")
+    if isinstance(explicit, bool):
+        return explicit
+    return _category_for_model(model) == "llm"
+
+
+def _model_supports_tools(model: dict[str, Any]) -> bool:
+    explicit = model.get("supports_tools")
+    if isinstance(explicit, bool):
+        return explicit
+    return False
+
+
+def _known_model_catalog() -> dict[str, dict[str, Any]]:
+    cache = _get_runtime_dispatcher_cache()
+    combined_models = [
+        *(((cache.get("validated_llm") or {}).get("data") or [])),
+        *(((cache.get("block_two") or {}).get("data") or [])),
+    ]
+    catalog: dict[str, dict[str, Any]] = {}
+    for model in combined_models:
+        if not isinstance(model, dict):
+            continue
+        provider = str(model.get("provider") or "").strip()
+        model_id = str(model.get("id") or model.get("model_id") or "").strip()
+        if not provider or not model_id:
+            continue
+        catalog[_resource_id(provider, model_id)] = model
+    return catalog
+
+
+def _find_known_model(provider_name: str | None, model_id: str | None) -> dict[str, Any]:
+    if not provider_name or not model_id:
+        return {}
+    return dict(_known_model_catalog().get(_resource_id(provider_name, model_id)) or {})
+
+
 def _remaining_rpm(item: dict) -> int | None:
     return item.get("limits", {}).get("requests", {}).get("minute", {}).get("remaining")
 
@@ -1250,6 +1437,10 @@ def _runtime_chat_models() -> list[dict]:
         model_id = str(model.get("id") or "").strip()
         if not provider or not model_id:
             continue
+        if _category_for_model(model) != "llm":
+            continue
+        if not _model_supports_chat(model):
+            continue
         if rate_limit_store.is_provider_quarantined(provider):
             continue
         if _is_invalid_resource(provider, model_id):
@@ -1273,6 +1464,7 @@ def _runtime_chat_models() -> list[dict]:
         if isinstance(route, dict)
         and route.get("provider")
         and route.get("model_id")
+        and route.get("category") == "llm"
         and not rate_limit_store.is_provider_quarantined(str(route.get("provider") or ""))
         and not _is_invalid_resource(str(route.get("provider") or ""), str(route.get("model_id") or ""))
     ]
@@ -1291,6 +1483,54 @@ def _extract_client_id(request: ChatCompletionRequest) -> str | None:
         value = metadata.get(key)
         if value is not None and str(value).strip():
             return str(value).strip()
+    return None
+
+
+def _request_uses_tools(request: ChatCompletionRequest) -> bool:
+    for message in request.messages:
+        role = str(getattr(message, "role", "") or "").strip().lower()
+        if role == "tool":
+            return True
+        if getattr(message, "tool_call_id", None):
+            return True
+        tool_calls = getattr(message, "tool_calls", None)
+        if isinstance(tool_calls, list) and tool_calls:
+            return True
+    return False
+
+
+def _validate_chat_payload(request: ChatCompletionRequest, known_model: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if not request.messages:
+        return {"reason": "messages_empty", "detail": "messages must not be empty"}
+
+    for index, message in enumerate(request.messages):
+        role = str(getattr(message, "role", "") or "").strip().lower()
+        if role == "tool" and not str(getattr(message, "tool_call_id", "") or "").strip():
+            return {
+                "reason": "tool_call_id_missing",
+                "detail": f"messages[{index}].tool_call_id is required for role='tool'",
+            }
+
+    if known_model:
+        if _category_for_model(known_model) != "llm" or not _model_supports_chat(known_model):
+            return {
+                "reason": "model_not_chat_capable",
+                "detail": "selected model is not eligible for chat/completions",
+            }
+        if _request_uses_tools(request) and not _model_supports_tools(known_model):
+            return {
+                "reason": "supports_tools_false",
+                "detail": "selected model does not support tool usage in chat/completions",
+            }
+        max_tokens = request.max_tokens
+        if isinstance(max_tokens, int) and max_tokens > 0:
+            max_completion_tokens = known_model.get("max_completion_tokens")
+            if isinstance(max_completion_tokens, int) and max_completion_tokens > 0 and max_tokens > max_completion_tokens:
+                return {
+                    "reason": "max_tokens_limit",
+                    "detail": f"max_tokens={max_tokens} exceeds model limit {max_completion_tokens}",
+                }
+
     return None
 
 
@@ -1391,6 +1631,7 @@ def _pick_auto_route(
     requested_model = request.model
     resource_affinity = _normalize_resource_affinity(getattr(request, "resource_affinity", None))
     client_id = _extract_client_id(request)
+    requires_tools = _request_uses_tools(request)
 
     provider_names = list(settings.get_provider_configs().keys())
     snapshot = rate_limit_store.get_snapshot(provider_names)
@@ -1398,6 +1639,8 @@ def _pick_auto_route(
         model
         for model in chat_models
         if _category_for_model(model) == "llm"
+        and _model_supports_chat(model)
+        and (not requires_tools or _model_supports_tools(model))
         and (
             _is_auto_value(requested_provider)
             or not requested_provider
@@ -1592,12 +1835,26 @@ async def get_limits_health() -> dict:
 
 @router.get("/admin", response_class=HTMLResponse, tags=["Admin"])
 async def admin_dashboard() -> HTMLResponse:
-    return HTMLResponse(content=ADMIN_PAGE_HTML)
+    return HTMLResponse(
+        content=ADMIN_PAGE_HTML,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @router.get("/admin/p2p", response_class=HTMLResponse, tags=["Admin"])
 async def p2p_admin_dashboard() -> HTMLResponse:
-    return HTMLResponse(content=P2P_ADMIN_PAGE_HTML)
+    return HTMLResponse(
+        content=P2P_ADMIN_PAGE_HTML,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @router.get("/admin/p2p/status", tags=["Admin"])
@@ -2087,6 +2344,34 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                 update_payload["model"] = str(selected_route["model"])
             effective_request = request.model_copy(update=update_payload)
 
+        known_model = _find_known_model(effective_request.provider, effective_request.model)
+        payload_error = _validate_chat_payload(effective_request, known_model)
+        if payload_error:
+            provider_name = str(effective_request.provider or "")
+            model_id = str(effective_request.model or "")
+            route_id = _resolve_local_route_id(provider_name, model_id)
+            if provider_name and model_id:
+                await _arrest_invalid_resource(
+                    provider_name,
+                    model_id,
+                    reason=f"request_incompatible:{payload_error['reason']}",
+                    source="request_preflight",
+                    invalid_minutes=REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES,
+                    status_code=400,
+                )
+            await _refresh_admin_cache_async()
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "request_incompatible",
+                    "reason": payload_error["reason"],
+                    "detail": payload_error["detail"],
+                    "provider": provider_name,
+                    "model": model_id,
+                    "route_id": route_id,
+                },
+            )
+
         if _is_invalid_resource(effective_request.provider, effective_request.model):
             invalid_item = _find_invalid_resource(effective_request.provider, effective_request.model)
             raise HTTPException(
@@ -2110,38 +2395,48 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
             raise HTTPException(status_code=400, detail=str(exc))
         except UpstreamProvidersExhausted as exc:
             retryable_errors = [error for error in exc.errors if isinstance(error, dict)]
-            if effective_request.provider and effective_request.model and _should_temporarily_quarantine_resource(retryable_errors):
-                first_temporary_error = retryable_errors[0] if retryable_errors else {}
-                await _arrest_temporary_resource(
-                    str(effective_request.provider),
-                    str(effective_request.model),
-                    reason=_temporary_error_reason(
-                        first_temporary_error.get("status_code"),
-                        str(first_temporary_error.get("detail") or ""),
-                    ),
-                    status_code=first_temporary_error.get("status_code"),
-                    detail=str(first_temporary_error.get("detail") or ""),
-                    route_id=_resolve_local_route_id(str(effective_request.provider), str(effective_request.model)),
-                )
-            elif effective_request.provider and effective_request.model:
-                first_non_temporary_error = retryable_errors[0] if retryable_errors else {}
-                await _record_resource_issue(
-                    str(effective_request.provider),
-                    str(effective_request.model),
-                    reason=f"resource_error:{first_non_temporary_error.get('status_code') or 'unknown'}",
-                    status_code=first_non_temporary_error.get("status_code"),
-                    source="error_observation",
-                    detail=str(first_non_temporary_error.get("detail") or ""),
-                    route_id=_resolve_local_route_id(str(effective_request.provider), str(effective_request.model)),
-                )
-                provider_router.logger.warning(
-                    "resource_not_quarantined provider=%s model=%s route_id=%s status_code=%s reason=non_temporary_error detail=%s",
-                    effective_request.provider,
-                    effective_request.model,
-                    _resolve_local_route_id(str(effective_request.provider), str(effective_request.model)),
-                    first_non_temporary_error.get("status_code"),
-                    " ".join(str(first_non_temporary_error.get("detail") or "").split())[:300],
-                )
+            classification = _classify_resource_error(retryable_errors)
+            if effective_request.provider and effective_request.model:
+                provider_name = str(effective_request.provider)
+                model_id = str(effective_request.model)
+                route_id = _resolve_local_route_id(provider_name, model_id)
+                if classification["action"] == "temporary_quarantine":
+                    await _arrest_temporary_resource(
+                        provider_name,
+                        model_id,
+                        reason=str(classification["reason"]),
+                        status_code=classification.get("status_code"),
+                        detail=str(classification.get("detail") or ""),
+                        route_id=route_id,
+                    )
+                elif classification["action"] in {"invalid_resource", "request_incompatible"}:
+                    await _arrest_invalid_resource(
+                        provider_name,
+                        model_id,
+                        reason=str(classification["reason"]),
+                        status_code=classification.get("status_code"),
+                        source=classification["action"],
+                        invalid_minutes=int(classification.get("invalid_minutes") or REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES),
+                    )
+                else:
+                    first_non_temporary_error = retryable_errors[0] if retryable_errors else {}
+                    await _record_resource_issue(
+                        provider_name,
+                        model_id,
+                        reason=str(classification["reason"]),
+                        status_code=first_non_temporary_error.get("status_code"),
+                        source="error_observation",
+                        detail=str(first_non_temporary_error.get("detail") or ""),
+                        route_id=route_id,
+                    )
+                    provider_router.logger.warning(
+                        "resource_not_quarantined provider=%s model=%s route_id=%s status_code=%s reason=non_temporary_error detail=%s",
+                        effective_request.provider,
+                        effective_request.model,
+                        route_id,
+                        first_non_temporary_error.get("status_code"),
+                        " ".join(str(first_non_temporary_error.get("detail") or "").split())[:300],
+                    )
             if (requested_provider_auto or requested_model_auto) and selected_route and selected_route.get("resource_id"):
                 if _should_retry_auto_dispatch(retryable_errors):
                     failed_resource_id = str(selected_route["resource_id"])
