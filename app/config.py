@@ -44,6 +44,7 @@ class Settings:
     ENABLE_PROVIDER_LOG: bool = os.getenv("ENABLE_PROVIDER_LOG", "false").lower() in ("1", "true", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
     PROXY_MODE: str = os.getenv("PROXY_MODE", "LOAD_BALANCE").upper()
+    ALLOW_RUNTIME_ADMIN_MUTATIONS: bool = os.getenv("ALLOW_RUNTIME_ADMIN_MUTATIONS", "false").lower() in ("1", "true", "yes")
 
     P2P_ENABLED: bool = os.getenv("P2P_ENABLED", "false").lower() in ("1", "true", "yes")
     NODE_MODE: str = os.getenv("NODE_MODE", "peer").strip().lower()

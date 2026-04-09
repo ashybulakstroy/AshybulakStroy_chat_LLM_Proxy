@@ -48,6 +48,31 @@
 - `POST /admin/p2p/nodes/remove`
 - `POST /admin/p2p/dispatch/preview`
 
+### Runtime mutation guard
+
+В проекте введен env-флаг:
+
+- `ALLOW_RUNTIME_ADMIN_MUTATIONS`
+
+Значение по умолчанию:
+
+- `false`
+
+При `false` сервер блокирует mutating runtime/admin endpoints с ответом `403`.
+
+Под блокировку попадают:
+
+- `POST /admin/p2p/config`
+- `POST /admin/p2p/peers/heartbeat`
+- `POST /admin/p2p/sessions`
+- `POST /admin/p2p/nodes/remove`
+- `POST /internal/p2p/re-register`
+- `POST /admin/invalid-resources`
+- `DELETE /admin/invalid-resources`
+- `POST /admin/dispatcher/mode`
+
+Наблюдательные и read-only endpoints продолжают работать без ограничений.
+
 ## Основные модули
 
 - [app/main.py](C:\Work\Projects\Prj_8_LLM_Proxy\app\main.py)
@@ -166,6 +191,10 @@
 - quarantine после mismatch response type
 - отображения в `Block #6`
 - фильтрации локальных P2P route catalogs
+
+Файл должен сохраняться между рестартами.
+
+На старте сервера содержимое `invalid_resources.json` повторно загружается в runtime.
 
 ## Session history
 

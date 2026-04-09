@@ -667,6 +667,15 @@ def _invalid_resources_payload() -> dict:
     }
 
 
+def _require_runtime_admin_mutations_enabled() -> None:
+    if settings.ALLOW_RUNTIME_ADMIN_MUTATIONS:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Runtime admin mutations are disabled by env. Set ALLOW_RUNTIME_ADMIN_MUTATIONS=true to enable.",
+    )
+
+
 _set_runtime_dispatcher_cache(_load_admin_cache())
 
 
@@ -1877,6 +1886,7 @@ async def update_p2p_runtime_config(
     node_mode: str | None = Query(default=None),
     p2p_enabled: bool | None = Query(default=None),
 ) -> dict:
+    _require_runtime_admin_mutations_enabled()
     try:
         return p2p_service.update_runtime_config(
             node_mode=node_mode,
@@ -1909,6 +1919,7 @@ async def upsert_p2p_peer_heartbeat(
     shared_rpm_ratio: float = Query(default=1.0),
     shared_tpm_ratio: float = Query(default=1.0),
 ) -> dict:
+    _require_runtime_admin_mutations_enabled()
     try:
         peer = p2p_service.register_or_update_peer(
             peer_id=peer_id,
@@ -1943,6 +1954,7 @@ async def update_p2p_session_counters(
     active_outgoing_sessions: int | None = Query(default=None),
     queued_tasks: int | None = Query(default=None),
 ) -> dict:
+    _require_runtime_admin_mutations_enabled()
     return p2p_service.set_session_counters(
         active_incoming_sessions=active_incoming_sessions,
         active_outgoing_sessions=active_outgoing_sessions,
@@ -1956,6 +1968,7 @@ async def remove_p2p_node(
     kind: str | None = Query(default=None),
     node_key: str = Query(...),
 ) -> dict:
+    _require_runtime_admin_mutations_enabled()
     try:
         return p2p_service.remove_known_node(mode=(mode or kind or ""), node_key=node_key)
     except ValueError as exc:
@@ -1985,6 +1998,7 @@ async def p2p_reregister_to_master(
     master_url: str | None = Query(default=None),
     reason: str = Query(default="manual_reregister"),
 ) -> dict:
+    _require_runtime_admin_mutations_enabled()
     try:
         return await p2p_service.send_local_heartbeat(master_url=master_url, reason=reason)
     except httpx.HTTPError as exc:
@@ -2021,6 +2035,7 @@ async def add_invalid_resource(
     source: str = Query(default="manual"),
     blocking: bool = Query(default=True),
 ) -> dict:
+    _require_runtime_admin_mutations_enabled()
     provider_name = provider_name.strip()
     model_id = model_id.strip()
     if not provider_name or not model_id:
@@ -2069,6 +2084,7 @@ async def delete_invalid_resource(
     provider_name: str | None = Query(default=None),
     model_id: str | None = Query(default=None),
 ) -> dict:
+    _require_runtime_admin_mutations_enabled()
     resolved_resource_id = (resource_id or "").strip()
     resolved_route_id = (route_id or "").strip()
     if not resolved_resource_id:
@@ -2120,6 +2136,7 @@ async def get_dispatcher_status() -> dict:
 
 @router.post("/admin/dispatcher/mode", tags=["Admin"])
 async def set_dispatcher_mode(mode: str = Query(...)) -> dict:
+    _require_runtime_admin_mutations_enabled()
     try:
         proxy_mode = provider_router.set_proxy_mode(mode)
         await _refresh_admin_cache_async()

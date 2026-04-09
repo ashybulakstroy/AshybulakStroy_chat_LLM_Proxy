@@ -191,6 +191,7 @@ PORT=8800
 ENABLE_PROVIDER_LOG=true
 LOG_LEVEL=INFO
 PROXY_MODE=LOAD_BALANCE
+ALLOW_RUNTIME_ADMIN_MUTATIONS=false
 
 GROQ_API_KEY=
 OPENROUTER_API_KEY=
@@ -212,6 +213,42 @@ P2P_ROUTE_TTL_MIN=1440
 P2P_MAX_CLIENT_SLOTS_PER_MIN=1
 P2P_MAX_SHARED_SLOTS_PER_MIN=5
 ```
+
+### Защита runtime-изменений
+
+По умолчанию live-изменение runtime-параметров сервера запрещено:
+
+- `ALLOW_RUNTIME_ADMIN_MUTATIONS=false`
+
+Это поведение рекомендуется сохранять для production.
+
+При выключенном флаге сервер возвращает `403` для mutating endpoints:
+
+- `POST /admin/p2p/config`
+- `POST /admin/p2p/peers/heartbeat`
+- `POST /admin/p2p/sessions`
+- `POST /admin/p2p/nodes/remove`
+- `POST /internal/p2p/re-register`
+- `POST /admin/invalid-resources`
+- `DELETE /admin/invalid-resources`
+- `POST /admin/dispatcher/mode`
+
+Чтобы временно разрешить online-изменения:
+
+```env
+ALLOW_RUNTIME_ADMIN_MUTATIONS=true
+```
+
+После изменения `.env` требуется перезапуск сервера.
+
+### Рекомендация для production
+
+Для production-площадки базовая позиция должна быть такой:
+
+- `ALLOW_RUNTIME_ADMIN_MUTATIONS=false`
+- P2P runtime-конфигурация меняется только через `.env` + restart
+- ручные runtime-mutations через admin UI не использовать как штатный канал конфигурации
+- `invalid_resources.json` и `p2p_network_snapshot.json` сохранять между рестартами
 
 ## Запуск
 
