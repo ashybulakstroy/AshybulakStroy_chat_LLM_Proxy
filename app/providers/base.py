@@ -14,3 +14,7 @@ class ProviderBase(ABC):
     @abstractmethod
     async def create_embeddings(self, request: Any) -> Dict[str, Any]:
         raise NotImplementedError
+
+    @abstractmethod
+    async def create_audio_transcription(self, request: Any) -> Dict[str, Any]:
+        raise NotImplementedError

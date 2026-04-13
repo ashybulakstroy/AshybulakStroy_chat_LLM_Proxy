@@ -13,6 +13,7 @@ OpenAI-compatible LLM proxy on FastAPI.
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
+- `POST /v1/audio/transcriptions`
 - `GET /admin`
 - `GET /admin/p2p`
 
@@ -23,8 +24,9 @@ OpenAI-compatible LLM proxy on FastAPI.
 - `GET /models`
 - `POST /chat/completions`
 - `POST /embeddings`
+- `POST /audio/transcriptions`
 
-Audio / image / video upstream calls в текущем коде не реализованы как отдельные transport-ветки.
+Image / video upstream calls в текущем коде не реализованы как отдельные transport-ветки.
 
 ## Основная логика LLM proxy
 
@@ -273,6 +275,23 @@ curl http://localhost:8800/health/limits
 curl http://localhost:8800/admin
 curl http://localhost:8800/admin/p2p
 ```
+
+Пример transcription request:
+
+```bash
+curl -X POST http://localhost:8800/v1/audio/transcriptions \
+  -F "file=@voice.ogg" \
+  -F "model=whisper-large-v3-turbo" \
+  -F "provider=groq"
+```
+
+Практический smoke-test уже выполнялся на русском audio sample:
+
+- источник: Wikimedia Commons
+- файл: `Russian_sayings.ogg`
+- provider: `groq`
+- model: `whisper-large-v3-turbo`
+- результат: endpoint вернул `200 OK` и нормализованный ответ `{ "text": "..." }`
 
 ## Статус проекта
 

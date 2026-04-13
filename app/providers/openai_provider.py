@@ -1,8 +1,10 @@
 import logging
 import time
+from typing import Any
 
 import httpx
 
+from app.audio_transcription import AudioTranscriptionRequestData
 from app.config import settings
 from app.providers.base import ProviderBase
 from app.rate_limits import rate_limit_store
@@ -17,7 +19,6 @@ class OpenAIProvider(ProviderBase):
         self.logger = logging.getLogger("ashybulak.proxy")
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
         }
 
     async def request(self, method: str, endpoint: str, json: dict) -> dict:
@@ -102,6 +103,94 @@ class OpenAIProvider(ProviderBase):
                     )
                 raise
 
+    async def multipart_request(
+        self,
+        endpoint: str,
+        data: dict[str, Any],
+        files: dict[str, Any],
+        timeout: float = 60.0,
+    ) -> dict:
+        url = f"{self.api_base}/{endpoint.lstrip('/')}"
+        started_at = time.perf_counter()
+
+        if settings.ENABLE_PROVIDER_LOG:
+            self.logger.info(
+                "provider_request_started provider=%s method=%s endpoint=%s",
+                self.provider_name,
+                "POST",
+                endpoint,
+            )
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.post(url, headers=self.headers, data=data, files=files)
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                if settings.ENABLE_PROVIDER_LOG:
+                    self.logger.info(
+                        "provider_request_finished provider=%s method=%s endpoint=%s status_code=%s duration_ms=%s",
+                        self.provider_name,
+                        "POST",
+                        endpoint,
+                        response.status_code,
+                        duration_ms,
+                    )
+                rate_limit_store.update_from_response(
+                    provider=self.provider_name,
+                    headers=dict(response.headers),
+                    status_code=response.status_code,
+                )
+                response.raise_for_status()
+                content_type = str(response.headers.get("content-type") or "").lower()
+                if "application/json" in content_type:
+                    return response.json()
+                return {"text": response.text}
+            except httpx.HTTPStatusError:
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                quarantine_activated = rate_limit_store.record_error(
+                    provider=self.provider_name,
+                    status_code=response.status_code,
+                    detail=response.text,
+                )
+                if quarantine_activated:
+                    try:
+                        from app.p2p_service import p2p_service
+
+                        await p2p_service.sync_local_route_catalog(reason=f"provider_quarantine:{self.provider_name}")
+                    except Exception:
+                        self.logger.exception(
+                            "provider_quarantine_p2p_sync_failed provider=%s status_code=%s",
+                            self.provider_name,
+                            response.status_code,
+                        )
+                if settings.ENABLE_PROVIDER_LOG:
+                    self.logger.exception(
+                        "provider_request_http_error provider=%s method=%s endpoint=%s status_code=%s duration_ms=%s response_body=%s",
+                        self.provider_name,
+                        "POST",
+                        endpoint,
+                        response.status_code,
+                        duration_ms,
+                        response.text,
+                    )
+                raise
+            except Exception as exc:
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                rate_limit_store.record_error(
+                    provider=self.provider_name,
+                    status_code=None,
+                    detail=str(exc),
+                )
+                if settings.ENABLE_PROVIDER_LOG:
+                    self.logger.exception(
+                        "provider_request_failed provider=%s method=%s endpoint=%s duration_ms=%s error=%s",
+                        self.provider_name,
+                        "POST",
+                        endpoint,
+                        duration_ms,
+                        str(exc),
+                    )
+                raise
+
     async def get_models(self) -> dict:
         return await self.request("GET", "/models", {})
 
@@ -122,3 +211,19 @@ class OpenAIProvider(ProviderBase):
             "input": request.input,
         }
         return await self.request("POST", "/embeddings", payload)
+
+    async def create_audio_transcription(self, request: AudioTranscriptionRequestData) -> dict:
+        data = {"model": request.model}
+        if request.language:
+            data["language"] = request.language
+        if request.prompt:
+            data["prompt"] = request.prompt
+
+        files = {
+            "file": (
+                request.filename,
+                request.file_bytes,
+                request.content_type or "application/octet-stream",
+            )
+        }
+        return await self.multipart_request("/audio/transcriptions", data=data, files=files)

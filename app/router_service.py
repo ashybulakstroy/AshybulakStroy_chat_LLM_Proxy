@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import httpx
 
+from app.audio_transcription import AudioTranscriptionRequestData, select_audio_provider
 from app.config import ProviderConfig, settings
 from app.providers.openai_provider import OpenAIProvider
 from app.rate_limits import DEFAULT_FALLBACK_RPM, rate_limit_store
@@ -89,6 +90,59 @@ class ProviderRouter:
             requested_provider=getattr(request, "provider", None),
             model=getattr(request, "model", None),
             operation=lambda provider: provider.create_embeddings(request),
+        )
+
+    async def create_audio_transcription(self, request: AudioTranscriptionRequestData) -> dict[str, Any]:
+        available_providers = self.get_target_providers()
+        selected_provider = select_audio_provider(request.provider, available_providers)
+        result = await self._execute_provider_operation(
+            selected_provider,
+            request.model,
+            operation=lambda provider: provider.create_audio_transcription(request),
+        )
+
+        if result["success"]:
+            await self._record_completed_session(
+                {
+                    "session_id": uuid4().hex,
+                    "provider": result["provider"],
+                    "model": result["model"],
+                    "status": "success",
+                    "status_code": result["status_code"],
+                    "detail": result["detail"],
+                    "started_at": result["started_at"],
+                    "finished_at": result["finished_at"],
+                    "mode": "AUDIO_TRANSCRIPTION",
+                }
+            )
+            response = result["response"]
+            response.setdefault("_proxy", {})
+            response["_proxy"]["selected_provider"] = result["provider"]
+            response["_proxy"]["selected_model"] = result["model"]
+            response["_proxy"]["requested_provider"] = request.provider
+            return response
+
+        await self._record_completed_session(
+            {
+                "session_id": uuid4().hex,
+                "provider": result["provider"],
+                "model": result["model"],
+                "status": "error",
+                "status_code": result["status_code"],
+                "detail": result["detail"],
+                "started_at": result["started_at"],
+                "finished_at": result["finished_at"],
+                "mode": "AUDIO_TRANSCRIPTION",
+            }
+        )
+        raise UpstreamProvidersExhausted(
+            [
+                {
+                    "provider": result["provider"],
+                    "status_code": result["status_code"],
+                    "detail": result["detail"],
+                }
+            ]
         )
 
     async def get_models(self, requested_provider: str | None = None) -> dict[str, Any]:

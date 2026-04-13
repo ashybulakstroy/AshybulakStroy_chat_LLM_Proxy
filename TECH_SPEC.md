@@ -26,6 +26,7 @@
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
+- `POST /v1/audio/transcriptions`
 
 ### Admin
 
@@ -72,6 +73,34 @@
 - `POST /admin/dispatcher/mode`
 
 Наблюдательные и read-only endpoints продолжают работать без ограничений.
+
+## Audio transcription
+
+Реализован базовый OpenAI-compatible endpoint:
+
+- `POST /v1/audio/transcriptions`
+
+Формат запроса:
+
+- `multipart/form-data`
+- `file`
+- `model`
+- `provider` optional
+- `language` optional
+- `prompt` optional
+
+Формат ответа:
+
+- `{ "text": "..." }`
+
+Ограничения первой версии:
+
+- single-provider execution path
+- без auto-routing между несколькими speech providers
+- без sticky affinity
+- без diarization
+- без timestamps
+- без streaming
 
 ## Основные модули
 

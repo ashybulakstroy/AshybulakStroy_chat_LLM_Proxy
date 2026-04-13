@@ -3,13 +3,18 @@ from collections import deque
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import time
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 
 from app.admin_ui import ADMIN_PAGE_HTML
+from app.audio_transcription import (
+    build_audio_transcription_request,
+    normalize_audio_transcription_response,
+)
 from app.config import settings
 from app.p2p_admin_ui import P2P_ADMIN_PAGE_HTML
 from app.p2p_service import p2p_service
@@ -2567,4 +2572,87 @@ async def create_embeddings(request: EmbeddingRequest) -> dict:
     except UpstreamProvidersExhausted as exc:
         await _refresh_admin_cache_async()
         raise HTTPException(status_code=502, detail=exc.errors)
+
+
+@router.post("/v1/audio/transcriptions", tags=["Audio"])
+async def create_audio_transcription(
+    file: UploadFile | None = File(default=None),
+    model: str | None = Form(default=None),
+    provider: str | None = Form(default=None),
+    language: str | None = Form(default=None),
+    prompt: str | None = Form(default=None),
+) -> dict:
+    started_at = time.perf_counter()
+    request_payload = await build_audio_transcription_request(
+        file=file,
+        model=model,
+        provider=provider,
+        language=language,
+        prompt=prompt,
+    )
+
+    provider_router.logger.info(
+        "audio_transcription_started provider=%s model=%s file_name=%s file_size_bytes=%s",
+        request_payload.provider or "auto",
+        request_payload.model,
+        request_payload.filename,
+        request_payload.size_bytes,
+    )
+
+    try:
+        upstream_response = await provider_router.create_audio_transcription(request_payload)
+        normalized_response = normalize_audio_transcription_response(upstream_response)
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        selected_provider = (
+            upstream_response.get("_proxy", {}).get("selected_provider")
+            if isinstance(upstream_response, dict)
+            else None
+        )
+        provider_router.logger.info(
+            "audio_transcription_finished status=success provider=%s model=%s file_size_bytes=%s duration_ms=%s",
+            selected_provider or request_payload.provider or "auto",
+            request_payload.model,
+            request_payload.size_bytes,
+            duration_ms,
+        )
+        await _refresh_admin_cache_async()
+        return normalized_response
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        provider_router.logger.warning(
+            "audio_transcription_finished status=error provider=%s model=%s file_size_bytes=%s duration_ms=%s detail=%s",
+            request_payload.provider or "auto",
+            request_payload.model,
+            request_payload.size_bytes,
+            duration_ms,
+            str(exc),
+        )
+        await _refresh_admin_cache_async()
+        raise HTTPException(status_code=502, detail=str(exc))
+    except UpstreamProvidersExhausted as exc:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        provider_router.logger.warning(
+            "audio_transcription_finished status=error provider=%s model=%s file_size_bytes=%s duration_ms=%s detail=%s",
+            request_payload.provider or "auto",
+            request_payload.model,
+            request_payload.size_bytes,
+            duration_ms,
+            exc.errors,
+        )
+        await _refresh_admin_cache_async()
+        raise HTTPException(status_code=502, detail=exc.errors)
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        provider_router.logger.exception(
+            "audio_transcription_finished status=error provider=%s model=%s file_size_bytes=%s duration_ms=%s error=%s",
+            request_payload.provider or "auto",
+            request_payload.model,
+            request_payload.size_bytes,
+            duration_ms,
+            str(exc),
+        )
+        await _refresh_admin_cache_async()
+        raise HTTPException(status_code=500, detail="Internal proxy error during audio transcription")
 
