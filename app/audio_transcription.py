@@ -88,11 +88,16 @@ def select_audio_provider(requested_provider: str | None, available_providers: l
     return available_providers[0]
 
 
-def normalize_audio_transcription_response(payload: Any) -> dict[str, str]:
+def normalize_audio_transcription_response(payload: Any) -> dict[str, Any]:
     text = _find_transcription_text(payload)
     if not text:
         raise ValueError("Upstream transcription response does not contain recognized text")
-    return {"text": text}
+    normalized = {"text": text}
+    if isinstance(payload, dict):
+        normalized["_upstream"] = payload
+    else:
+        normalized["_upstream"] = {"raw": payload}
+    return normalized
 
 
 def _find_transcription_text(payload: Any) -> str | None:

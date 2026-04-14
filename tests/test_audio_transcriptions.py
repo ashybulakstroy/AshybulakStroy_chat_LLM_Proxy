@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.audio_transcription import normalize_audio_transcription_response
 from app.main import app
 
 
@@ -25,3 +26,16 @@ def test_audio_transcriptions_requires_model() -> None:
 
     assert response.status_code == 400
     assert response.json() == {"detail": "model is required"}
+
+
+def test_audio_transcription_normalization_keeps_raw_upstream_without_proxy() -> None:
+    payload = {
+        "text": "привет мир",
+        "x_groq": {"id": "abc"},
+        "_proxy": {"selected_provider": "groq"},
+    }
+
+    normalized = normalize_audio_transcription_response(payload)
+
+    assert normalized["text"] == "привет мир"
+    assert normalized["_upstream"] == payload

@@ -2601,7 +2601,12 @@ async def create_audio_transcription(
 
     try:
         upstream_response = await provider_router.create_audio_transcription(request_payload)
-        normalized_response = normalize_audio_transcription_response(upstream_response)
+        raw_upstream_response = (
+            {key: value for key, value in upstream_response.items() if key != "_proxy"}
+            if isinstance(upstream_response, dict)
+            else upstream_response
+        )
+        normalized_response = normalize_audio_transcription_response(raw_upstream_response)
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         selected_provider = (
             upstream_response.get("_proxy", {}).get("selected_provider")
@@ -2642,7 +2647,21 @@ async def create_audio_transcription(
             exc.errors,
         )
         await _refresh_admin_cache_async()
-        raise HTTPException(status_code=502, detail=exc.errors)
+        first_error = exc.errors[0] if exc.errors else {}
+        provider_name = str(first_error.get("provider") or request_payload.provider or "")
+        model_id = request_payload.model
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "upstream_audio_transcription_failed",
+                "provider": provider_name or None,
+                "model": model_id,
+                "resource": f"{provider_name}::{model_id}" if provider_name else model_id,
+                "status_code": first_error.get("status_code"),
+                "upstream_error": first_error.get("detail"),
+                "attempts": exc.errors,
+            },
+        )
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         provider_router.logger.exception(

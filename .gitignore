@@ -18,3 +18,8 @@ model_validation_snapshot.json
 provider_limits.json
 rate_limits_snapshot.json
 p2p_network_snapshot.json
+tmp_*.ogg
+tmp_*.mp3
+tmp_*.wav
+tmp_*.m4a
+tmp_*.opus
