@@ -218,6 +218,10 @@ class OpenAIProvider(ProviderBase):
             data["language"] = request.language
         if request.prompt:
             data["prompt"] = request.prompt
+        if request.response_format:
+            data["response_format"] = request.response_format
+        if request.temperature is not None:
+            data["temperature"] = str(request.temperature)
 
         files = {
             "file": (

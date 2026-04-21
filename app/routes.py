@@ -83,6 +83,7 @@ AUTO_LAST_SELECTED_PROVIDER: str | None = None
 REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES = 30
 MODEL_NOT_FOUND_INVALID_MINUTES = 24 * 60
 CREDITS_INVALID_MINUTES = 6 * 60
+BAD_REQUEST_INVALID_MINUTES = 24 * 60
 
 
 def _set_runtime_dispatcher_cache(payload: dict | None) -> dict:
@@ -367,6 +368,16 @@ def _classify_resource_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
             "status_code": status_code,
             "detail": detail,
             "invalid_minutes": CREDITS_INVALID_MINUTES,
+            "retry_auto": True,
+        }
+
+    if status_code == 400:
+        return {
+            "action": "invalid_resource",
+            "reason": f"bad_request:{suffix}",
+            "status_code": status_code,
+            "detail": detail,
+            "invalid_minutes": BAD_REQUEST_INVALID_MINUTES,
             "retry_auto": True,
         }
 
@@ -2581,6 +2592,8 @@ async def create_audio_transcription(
     provider: str | None = Form(default=None),
     language: str | None = Form(default=None),
     prompt: str | None = Form(default=None),
+    response_format: str | None = Form(default=None),
+    temperature: str | None = Form(default=None),
 ) -> dict:
     started_at = time.perf_counter()
     request_payload = await build_audio_transcription_request(
@@ -2589,6 +2602,8 @@ async def create_audio_transcription(
         provider=provider,
         language=language,
         prompt=prompt,
+        response_format=response_format,
+        temperature=temperature,
     )
 
     provider_router.logger.info(

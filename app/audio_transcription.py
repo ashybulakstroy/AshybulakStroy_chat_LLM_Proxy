@@ -28,6 +28,8 @@ class AudioTranscriptionRequestData:
     provider: str | None = None
     language: str | None = None
     prompt: str | None = None
+    response_format: str | None = None
+    temperature: float | None = None
 
     @property
     def size_bytes(self) -> int:
@@ -40,6 +42,8 @@ async def build_audio_transcription_request(
     provider: str | None = None,
     language: str | None = None,
     prompt: str | None = None,
+    response_format: str | None = None,
+    temperature: str | float | None = None,
 ) -> AudioTranscriptionRequestData:
     cleaned_model = str(model or "").strip()
     if not file:
@@ -61,6 +65,13 @@ async def build_audio_transcription_request(
     cleaned_provider = str(provider or "").strip() or None
     cleaned_language = str(language or "").strip() or None
     cleaned_prompt = str(prompt or "").strip() or None
+    cleaned_response_format = str(response_format or "").strip() or None
+    cleaned_temperature: float | None = None
+    if temperature is not None and str(temperature).strip() != "":
+        try:
+            cleaned_temperature = float(temperature)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="temperature must be a valid number") from exc
 
     return AudioTranscriptionRequestData(
         model=cleaned_model,
@@ -70,6 +81,8 @@ async def build_audio_transcription_request(
         provider=cleaned_provider,
         language=cleaned_language,
         prompt=cleaned_prompt,
+        response_format=cleaned_response_format,
+        temperature=cleaned_temperature,
     )
 
 
