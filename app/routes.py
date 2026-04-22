@@ -260,6 +260,17 @@ def _find_invalid_resource(provider_name: str | None, model_id: str | None) -> d
     return {}
 
 
+def _invalid_providers_for_model(model_id: str | None) -> set[str]:
+    normalized_model = str(model_id or "").strip()
+    if not normalized_model:
+        return set()
+    return {
+        str(item.get("provider") or "").strip()
+        for item in _active_invalid_resource_entries()
+        if _is_blocking_invalid_entry(item) and str(item.get("model") or "").strip() == normalized_model
+    }
+
+
 def _normalize_response_type(value: str | None) -> str:
     cleaned = str(value or "json").strip().lower()
     if cleaned in {"json", "text", "audio", "video"}:
@@ -420,6 +431,82 @@ def _classify_resource_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+async def _apply_resource_error_classification(
+    provider_name: str,
+    model_id: str,
+    errors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    classification = _classify_resource_error(errors)
+    route_id = _resolve_local_route_id(provider_name, model_id)
+
+    if classification["action"] == "temporary_quarantine":
+        await _arrest_temporary_resource(
+            provider_name,
+            model_id,
+            reason=str(classification["reason"]),
+            status_code=classification.get("status_code"),
+            detail=str(classification.get("detail") or ""),
+            route_id=route_id,
+        )
+    elif classification["action"] in {"invalid_resource", "request_incompatible"}:
+        await _arrest_invalid_resource(
+            provider_name,
+            model_id,
+            reason=str(classification["reason"]),
+            status_code=classification.get("status_code"),
+            source=classification["action"],
+            invalid_minutes=int(classification.get("invalid_minutes") or REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES),
+        )
+    else:
+        first_non_temporary_error = errors[0] if errors else {}
+        await _record_resource_issue(
+            provider_name,
+            model_id,
+            reason=str(classification["reason"]),
+            status_code=first_non_temporary_error.get("status_code"),
+            source="error_observation",
+            detail=str(first_non_temporary_error.get("detail") or ""),
+            route_id=route_id,
+        )
+        provider_router.logger.warning(
+            "resource_not_quarantined provider=%s model=%s route_id=%s status_code=%s reason=non_temporary_error detail=%s",
+            provider_name,
+            model_id,
+            route_id,
+            first_non_temporary_error.get("status_code"),
+            " ".join(str(first_non_temporary_error.get("detail") or "").split())[:300],
+        )
+
+    return classification
+
+
+async def _apply_attempted_provider_quarantine(model_id: str, attempted: list[dict[str, Any]]) -> None:
+    seen_provider_models: set[tuple[str, str]] = set()
+    for item in attempted:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") != "error":
+            continue
+        provider_name = str(item.get("provider") or "").strip()
+        if not provider_name or not model_id:
+            continue
+        key = (provider_name, model_id)
+        if key in seen_provider_models:
+            continue
+        seen_provider_models.add(key)
+        await _apply_resource_error_classification(
+            provider_name,
+            model_id,
+            [
+                {
+                    "provider": provider_name,
+                    "status_code": item.get("status_code"),
+                    "detail": item.get("detail"),
+                }
+            ],
+        )
+
+
 def _is_retryable_auto_dispatch_status(status_code: int | None) -> bool:
     if status_code is None:
         return True
@@ -570,6 +657,15 @@ async def _arrest_invalid_resource(
     data.append(next_item)
     payload["data"] = sorted(data, key=lambda item: str(item.get("arrested_at") or ""), reverse=True)
     _save_invalid_resources(payload)
+    local_time = datetime.now().strftime("%d:%H:%M")
+    provider_router.logger.warning(
+        "resource_quarantined resource=%s status_code=%s period=%smin time=%s reason=%s",
+        resource_id,
+        status_code,
+        max(1, invalid_minutes),
+        local_time,
+        reason,
+    )
     if sync_p2p:
         await _sync_p2p_route_catalog(reason=f"invalid_resource_added:{resolved_route_id or resource_id}")
     return next_item
@@ -725,6 +821,68 @@ def _apply_last_session_index(cache_payload: dict, sessions_index: dict[str, dic
         route["last_session_error"] = session.get("last_session_error")
         route["last_session_at"] = session.get("last_session_at")
         route["last_session_mode"] = session.get("last_session_mode")
+    return cache_payload
+
+
+def _sync_validated_llm_with_runtime_errors(cache_payload: dict, sessions_index: dict[str, dict]) -> dict:
+    validated_payload = cache_payload.get("validated_llm")
+    if not isinstance(validated_payload, dict):
+        return cache_payload
+
+    validated_models = validated_payload.get("data")
+    if not isinstance(validated_models, list):
+        return cache_payload
+
+    invalid_items = {}
+    for item in ((cache_payload.get("invalid_resources") or {}).get("data") or []):
+        if not isinstance(item, dict):
+            continue
+        provider_name = str(item.get("provider") or "").strip()
+        model_id = str(item.get("model") or "").strip()
+        if not provider_name or not model_id:
+            continue
+        invalid_items[_model_validation_key(provider_name, model_id)] = item
+
+    synced_models: list[dict] = []
+    for model in validated_models:
+        if not isinstance(model, dict):
+            synced_models.append(model)
+            continue
+        provider_name = str(model.get("provider") or "").strip()
+        model_id = str(model.get("id") or model.get("model_id") or "").strip()
+        if not provider_name or not model_id:
+            synced_models.append(model)
+            continue
+
+        key = _model_validation_key(provider_name, model_id)
+        invalid_item = invalid_items.get(key)
+        if not invalid_item:
+            synced_models.append(model)
+            continue
+
+        session = sessions_index.get(key, {})
+        validation = dict(model.get("_validation") or {})
+        status_code = invalid_item.get("status_code")
+        reason = str(invalid_item.get("reason") or "").strip()
+        if status_code is not None and reason:
+            validation["message_excerpt"] = f"{status_code} {reason}"
+        elif status_code is not None:
+            validation["message_excerpt"] = str(status_code)
+        elif reason:
+            validation["message_excerpt"] = reason
+
+        validation["validated_at"] = (
+            session.get("last_session_at")
+            or invalid_item.get("arrested_at")
+            or validation.get("validated_at")
+        )
+        validation["error"] = invalid_item.get("reason") or validation.get("error")
+
+        enriched = dict(model)
+        enriched["_validation"] = validation
+        synced_models.append(enriched)
+
+    validated_payload["data"] = synced_models
     return cache_payload
 
 
@@ -906,7 +1064,9 @@ async def _refresh_admin_cache_async(
         block_two_payload=block_two_payload,
         validated_llm_payload=validated_llm_payload,
     )
-    cache_payload = _apply_last_session_index(cache_payload, await _last_session_index())
+    sessions_index = await _last_session_index()
+    cache_payload = _apply_last_session_index(cache_payload, sessions_index)
+    cache_payload = _sync_validated_llm_with_runtime_errors(cache_payload, sessions_index)
     _save_admin_cache(cache_payload)
     return cache_payload
 
@@ -2189,7 +2349,7 @@ async def get_available_models_for_admin() -> dict:
 
 @router.get("/admin/models/validated-llm", tags=["Admin"])
 async def get_validated_llm_models_for_admin() -> dict:
-    cache_payload = _load_admin_cache()
+    cache_payload = await _refresh_admin_cache_async()
     validated_llm = cache_payload.get("validated_llm")
     if isinstance(validated_llm, dict):
         return validated_llm
@@ -2421,55 +2581,64 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                 },
             )
 
+        excluded_providers: set[str] = set()
+        if not effective_request.provider and effective_request.model and not _is_auto_value(effective_request.model):
+            excluded_providers = _invalid_providers_for_model(str(effective_request.model))
+            if excluded_providers:
+                provider_router.logger.info(
+                    "invalid_resource_skip model=%s excluded_providers=%s",
+                    effective_request.model,
+                    sorted(excluded_providers),
+                )
+                configured_providers = {str(name).strip() for name in settings.get_provider_configs().keys() if str(name).strip()}
+                if configured_providers and configured_providers.issubset(excluded_providers):
+                    await _refresh_admin_cache_async()
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "all_model_resources_quarantined",
+                            "model": str(effective_request.model),
+                            "excluded_providers": sorted(excluded_providers),
+                        },
+                    )
         try:
-            response = await provider_router.race_chat_completion(effective_request)
+            response = await provider_router.race_chat_completion(
+                effective_request,
+                excluded_providers=excluded_providers,
+            )
         except ValueError as exc:
             await _refresh_admin_cache_async()
             raise HTTPException(status_code=400, detail=str(exc))
         except UpstreamProvidersExhausted as exc:
             retryable_errors = [error for error in exc.errors if isinstance(error, dict)]
             classification = _classify_resource_error(retryable_errors)
+            provider_router.logger.warning(
+                "resource_error_classified provider=%s model=%s action=%s status_code=%s reason=%s detail=%s",
+                getattr(effective_request, "provider", None),
+                getattr(effective_request, "model", None),
+                classification.get("action"),
+                classification.get("status_code"),
+                classification.get("reason"),
+                " ".join(str(classification.get("detail") or "").split())[:300],
+            )
             if effective_request.provider and effective_request.model:
-                provider_name = str(effective_request.provider)
-                model_id = str(effective_request.model)
-                route_id = _resolve_local_route_id(provider_name, model_id)
-                if classification["action"] == "temporary_quarantine":
-                    await _arrest_temporary_resource(
-                        provider_name,
-                        model_id,
-                        reason=str(classification["reason"]),
-                        status_code=classification.get("status_code"),
-                        detail=str(classification.get("detail") or ""),
-                        route_id=route_id,
-                    )
-                elif classification["action"] in {"invalid_resource", "request_incompatible"}:
-                    await _arrest_invalid_resource(
-                        provider_name,
-                        model_id,
-                        reason=str(classification["reason"]),
-                        status_code=classification.get("status_code"),
-                        source=classification["action"],
-                        invalid_minutes=int(classification.get("invalid_minutes") or REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES),
-                    )
-                else:
-                    first_non_temporary_error = retryable_errors[0] if retryable_errors else {}
-                    await _record_resource_issue(
-                        provider_name,
-                        model_id,
-                        reason=str(classification["reason"]),
-                        status_code=first_non_temporary_error.get("status_code"),
-                        source="error_observation",
-                        detail=str(first_non_temporary_error.get("detail") or ""),
-                        route_id=route_id,
-                    )
-                    provider_router.logger.warning(
-                        "resource_not_quarantined provider=%s model=%s route_id=%s status_code=%s reason=non_temporary_error detail=%s",
-                        effective_request.provider,
-                        effective_request.model,
-                        route_id,
-                        first_non_temporary_error.get("status_code"),
-                        " ".join(str(first_non_temporary_error.get("detail") or "").split())[:300],
-                    )
+                await _apply_resource_error_classification(
+                    str(effective_request.provider),
+                    str(effective_request.model),
+                    retryable_errors,
+                )
+            elif effective_request.model and retryable_errors:
+                seen_provider_models: set[tuple[str, str]] = set()
+                for item in retryable_errors:
+                    provider_name = str(item.get("provider") or "").strip()
+                    model_id = str(effective_request.model)
+                    if not provider_name:
+                        continue
+                    key = (provider_name, model_id)
+                    if key in seen_provider_models:
+                        continue
+                    seen_provider_models.add(key)
+                    await _apply_resource_error_classification(provider_name, model_id, [item])
             if (requested_provider_auto or requested_model_auto) and selected_route and selected_route.get("resource_id"):
                 if _should_retry_auto_dispatch(retryable_errors):
                     failed_resource_id = str(selected_route["resource_id"])
@@ -2508,6 +2677,9 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
         response["provider"] = response["_proxy"].get("selected_provider") or effective_request.provider
         response["model"] = response["_proxy"].get("selected_model") or effective_request.model
         response["_proxy"]["response_type"] = expected_response_type
+        attempted_providers = response.get("_proxy", {}).get("attempted_providers") or []
+        if effective_request.model and isinstance(attempted_providers, list):
+            await _apply_attempted_provider_quarantine(str(effective_request.model), attempted_providers)
 
         if not _response_supports_type(response, expected_response_type):
             provider_name = str(response["provider"] or effective_request.provider or "")

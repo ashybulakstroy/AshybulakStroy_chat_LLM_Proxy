@@ -44,17 +44,24 @@ class ProviderRouter:
         provider_config = self.provider_configs[provider_name]
         return self._build_provider(provider_config)
 
-    def get_target_providers(self, requested_provider: str | None = None) -> list[str]:
+    def get_target_providers(
+        self,
+        requested_provider: str | None = None,
+        excluded_providers: set[str] | None = None,
+    ) -> list[str]:
         if not self.provider_configs:
             raise ValueError("No providers are configured")
+        excluded = {str(item).strip() for item in (excluded_providers or set()) if str(item).strip()}
         if requested_provider:
             if requested_provider not in self.provider_configs:
                 raise ValueError(f"Provider '{requested_provider}' is not configured")
+            if requested_provider in excluded:
+                return []
             return [requested_provider]
         return [
             provider_name
             for provider_name in self.list_available_providers()
-            if not rate_limit_store.is_provider_quarantined(provider_name)
+            if provider_name not in excluded and not rate_limit_store.is_provider_quarantined(provider_name)
         ]
 
     def get_proxy_mode(self) -> str:
@@ -78,11 +85,12 @@ class ProviderRouter:
             "completed_sessions": await self.get_completed_sessions(10),
         }
 
-    async def race_chat_completion(self, request: Any) -> dict[str, Any]:
+    async def race_chat_completion(self, request: Any, excluded_providers: set[str] | None = None) -> dict[str, Any]:
         return await self._dispatch_providers(
             requested_provider=getattr(request, "provider", None),
             model=getattr(request, "model", None),
             operation=lambda provider: provider.create_chat_completion(request),
+            excluded_providers=excluded_providers,
         )
 
     async def race_embeddings(self, request: Any) -> dict[str, Any]:
@@ -356,18 +364,20 @@ class ProviderRouter:
         requested_provider: str | None,
         model: str | None,
         operation: Callable[[OpenAIProvider], Awaitable[dict[str, Any]]],
+        excluded_providers: set[str] | None = None,
     ) -> dict[str, Any]:
         if self.proxy_mode == "FAST":
-            return await self._parallel_race_providers(requested_provider, model, operation)
-        return await self._sequential_race_providers(requested_provider, model, operation)
+            return await self._parallel_race_providers(requested_provider, model, operation, excluded_providers=excluded_providers)
+        return await self._sequential_race_providers(requested_provider, model, operation, excluded_providers=excluded_providers)
 
     async def _parallel_race_providers(
         self,
         requested_provider: str | None,
         model: str | None,
         operation: Callable[[OpenAIProvider], Awaitable[dict[str, Any]]],
+        excluded_providers: set[str] | None = None,
     ) -> dict[str, Any]:
-        target_providers = self.get_target_providers(requested_provider)
+        target_providers = self.get_target_providers(requested_provider, excluded_providers=excluded_providers)
         ordered_providers = self._sort_providers(target_providers)
         errors: list[dict[str, Any]] = []
         attempted: list[dict[str, Any]] = []
@@ -450,8 +460,9 @@ class ProviderRouter:
         requested_provider: str | None,
         model: str | None,
         operation: Callable[[OpenAIProvider], Awaitable[dict[str, Any]]],
+        excluded_providers: set[str] | None = None,
     ) -> dict[str, Any]:
-        target_providers = self.get_target_providers(requested_provider)
+        target_providers = self.get_target_providers(requested_provider, excluded_providers=excluded_providers)
         ordered_providers = self._sort_providers(target_providers)
         errors: list[dict[str, Any]] = []
         attempted: list[dict[str, Any]] = []
