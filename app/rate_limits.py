@@ -8,7 +8,7 @@ from typing import Any
 
 
 DEFAULT_FALLBACK_RPM = 1
-PAYMENT_REQUIRED_QUARANTINE_DAYS = 7
+CLIENT_ERROR_QUARANTINE_DAYS = 1
 LIMITS_FILE = Path(__file__).resolve().parent.parent / "provider_limits.json"
 SNAPSHOT_FILE = Path(__file__).resolve().parent.parent / "rate_limits_snapshot.json"
 
@@ -226,6 +226,20 @@ class RateLimitStore:
     def ensure_provider(self, provider: str) -> None:
         self._state.setdefault(provider, ProviderLimitState(provider=provider))
 
+    def _normalize_loaded_quarantine(self, state: ProviderLimitState) -> None:
+        if state.quarantine_status_code not in {401, 402, 403}:
+            return
+        if not state.last_observed_at or not state.quarantine_until:
+            return
+        try:
+            observed_at = datetime.fromisoformat(state.last_observed_at)
+            current_until = datetime.fromisoformat(state.quarantine_until)
+        except ValueError:
+            return
+        expected_until = observed_at + timedelta(days=CLIENT_ERROR_QUARANTINE_DAYS)
+        if current_until > expected_until:
+            state.quarantine_until = expected_until.isoformat()
+
     def load_snapshot(self, providers: list[str]) -> None:
         if not SNAPSHOT_FILE.exists():
             self._create_snapshot_file(providers)
@@ -245,6 +259,7 @@ class RateLimitStore:
             provider_payload = snapshot_state.get(provider)
             if provider_payload:
                 self._state[provider] = ProviderLimitState.from_snapshot_dict(provider_payload)
+                self._normalize_loaded_quarantine(self._state[provider])
             else:
                 self.ensure_provider(provider)
 
@@ -327,8 +342,8 @@ class RateLimitStore:
         state.last_status_code = status_code
         state.last_error = detail
         state.last_observed_at = datetime.now(timezone.utc).isoformat()
-        if status_code == 402:
-            until = datetime.now(timezone.utc) + timedelta(days=PAYMENT_REQUIRED_QUARANTINE_DAYS)
+        if status_code in {401, 402, 403}:
+            until = datetime.now(timezone.utc) + timedelta(days=CLIENT_ERROR_QUARANTINE_DAYS)
             state.quarantine_until = until.isoformat()
             state.quarantine_reason = detail
             state.quarantine_status_code = status_code

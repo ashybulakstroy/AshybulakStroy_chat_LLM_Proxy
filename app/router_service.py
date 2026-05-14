@@ -10,6 +10,43 @@ from app.audio_transcription import AudioTranscriptionRequestData, select_audio_
 from app.config import ProviderConfig, settings
 from app.providers.openai_provider import OpenAIProvider
 from app.rate_limits import DEFAULT_FALLBACK_RPM, rate_limit_store
+from app.schemas import ChatCompletionRequest
+
+
+PROVIDER_PROBE_MODELS = {
+    "groq": ["llama-3.1-8b-instant", "qwen/qwen3-32b"],
+    "openrouter": ["openrouter/free", "deepseek/deepseek-v4-flash:free", "qwen/qwen3-next-80b-a3b-instruct:free"],
+    "cerebras": ["llama3.1-8b", "gpt-oss-120b"],
+    "sambanova": ["DeepSeek-V3.2", "DeepSeek-V3.1"],
+    "fireworks": [
+        "accounts/fireworks/models/glm-5p1",
+        "accounts/fireworks/models/glm-5",
+        "accounts/fireworks/models/gpt-oss-120b",
+    ],
+    "gemini": ["models/gemini-2.5-flash", "models/gemini-2.0-flash"],
+}
+
+
+def _looks_chat_capable(model: dict[str, Any]) -> bool:
+    if model.get("supports_chat") is False:
+        return False
+    model_id = str(model.get("id") or "").lower()
+    kind = str(model.get("kind") or "").lower()
+    haystack = f"{model_id} {kind}"
+    blocked_hints = ("whisper", "audio", "transcribe", "embedding", "imagen", "veo", "flux", "lyria")
+    return not any(hint in haystack for hint in blocked_hints)
+
+
+def _select_probe_model(provider_name: str, models: list[dict[str, Any]]) -> str | None:
+    by_id = {str(model.get("id") or ""): model for model in models if isinstance(model, dict) and model.get("id")}
+    for model_id in PROVIDER_PROBE_MODELS.get(provider_name, []):
+        model = by_id.get(model_id)
+        if model and _looks_chat_capable(model):
+            return model_id
+    for model in models:
+        if isinstance(model, dict) and model.get("id") and _looks_chat_capable(model):
+            return str(model["id"])
+    return None
 
 
 class UpstreamProvidersExhausted(Exception):
@@ -206,7 +243,24 @@ class ProviderRouter:
         async def probe(provider_name: str) -> tuple[str, str | None, dict[str, Any] | None]:
             provider = self.get_provider(provider_name)
             try:
-                await provider.get_models()
+                models_response = await provider.get_models()
+                models = [model for model in models_response.get("data", []) if isinstance(model, dict)]
+                probe_model = _select_probe_model(provider_name, models)
+                if not probe_model:
+                    return provider_name, "error", {
+                        "provider": provider_name,
+                        "status_code": None,
+                        "detail": "No chat-capable model found for startup probe.",
+                    }
+                await provider.create_chat_completion(
+                    ChatCompletionRequest(
+                        provider=provider_name,
+                        model=probe_model,
+                        messages=[{"role": "user", "content": "ping"}],
+                        max_tokens=8,
+                        temperature=0.1,
+                    )
+                )
                 return provider_name, None, None
             except httpx.HTTPStatusError as exc:
                 return provider_name, "error", {

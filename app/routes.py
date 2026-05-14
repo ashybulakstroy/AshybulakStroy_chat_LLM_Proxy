@@ -30,10 +30,15 @@ ADMIN_CACHE_FILE = Path(__file__).resolve().parent.parent / "admin_dashboard_cac
 INVALID_RESOURCES_FILE = Path(__file__).resolve().parent.parent / "invalid_resources.json"
 PREFERRED_TEST_MODELS = {
     "groq": ["llama-3.1-8b-instant", "qwen/qwen3-32b"],
-    "openrouter": ["qwen/qwen3.6-plus-preview:free", "openai/gpt-5.4-mini"],
+    "openrouter": ["openrouter/free", "deepseek/deepseek-v4-flash:free", "qwen/qwen3-next-80b-a3b-instruct:free"],
     "cerebras": ["llama3.1-8b", "qwen-3-235b-a22b-instruct-2507"],
     "gemini": ["models/gemini-2.5-flash", "models/gemini-2.0-flash"],
     "sambanova": ["DeepSeek-V3.2", "DeepSeek-V3.1"],
+    "fireworks": [
+        "accounts/fireworks/models/glm-5p1",
+        "accounts/fireworks/models/glm-5",
+        "accounts/fireworks/models/gpt-oss-120b",
+    ],
 }
 GROQ_EXCLUDED_PREFIXES = ("canopylabs/orpheus",)
 GEMINI_FREE_TIER_PREFIXES = (
@@ -84,6 +89,9 @@ REQUEST_INCOMPATIBLE_QUARANTINE_MINUTES = 30
 MODEL_NOT_FOUND_INVALID_MINUTES = 24 * 60
 CREDITS_INVALID_MINUTES = 6 * 60
 BAD_REQUEST_INVALID_MINUTES = 24 * 60
+CLIENT_ERROR_INVALID_MINUTES = 24 * 60
+DEFAULT_TEMPORARY_QUARANTINE_MINUTES = 10
+SERVICE_UNAVAILABLE_QUARANTINE_MINUTES = 60
 
 
 def _set_runtime_dispatcher_cache(payload: dict | None) -> dict:
@@ -162,7 +170,43 @@ def _load_invalid_resources() -> dict:
     payload.setdefault("meta", {})
     payload["meta"].setdefault("updated_at", None)
     payload["meta"].setdefault("temporary_backoff", {})
+    changed = False
+    normalized_items: list[dict] = []
+    for item in payload.get("data", []):
+        if not isinstance(item, dict):
+            changed = True
+            continue
+        normalized_item = dict(item)
+        status_code = normalized_item.get("status_code")
+        if isinstance(status_code, int) and 400 <= status_code <= 499:
+            arrested_at = str(normalized_item.get("arrested_at") or "").strip()
+            try:
+                arrested_dt = datetime.fromisoformat(arrested_at) if arrested_at else datetime.now(timezone.utc)
+            except ValueError:
+                arrested_dt = datetime.now(timezone.utc)
+            expected_until = (arrested_dt + timedelta(minutes=CLIENT_ERROR_INVALID_MINUTES)).isoformat()
+            if normalized_item.get("blocking") is not True:
+                normalized_item["blocking"] = True
+                changed = True
+            current_until = normalized_item.get("invalid_until")
+            if not current_until:
+                normalized_item["invalid_until"] = expected_until
+                changed = True
+            else:
+                try:
+                    current_dt = datetime.fromisoformat(str(current_until))
+                    expected_dt = datetime.fromisoformat(expected_until)
+                    if current_dt > expected_dt:
+                        normalized_item["invalid_until"] = expected_until
+                        changed = True
+                except ValueError:
+                    normalized_item["invalid_until"] = expected_until
+                    changed = True
+        normalized_items.append(normalized_item)
+    payload["data"] = normalized_items
     payload["meta"]["total"] = len(payload.get("data", []))
+    if changed:
+        return _save_invalid_resources(payload)
     return payload
 
 
@@ -363,22 +407,13 @@ def _classify_resource_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
     detail = str(first.get("detail") or "")
     suffix = _error_reason_suffix(detail)
 
-    if items and all(_is_temporary_resource_error_status(item.get("status_code")) for item in items):
-        return {
-            "action": "temporary_quarantine",
-            "reason": _temporary_error_reason(status_code, detail),
-            "status_code": status_code,
-            "detail": detail,
-            "retry_auto": True,
-        }
-
     if status_code == 402:
         return {
             "action": "invalid_resource",
             "reason": f"provider_credits_exhausted:{suffix}",
             "status_code": status_code,
             "detail": detail,
-            "invalid_minutes": CREDITS_INVALID_MINUTES,
+            "invalid_minutes": CLIENT_ERROR_INVALID_MINUTES,
             "retry_auto": True,
         }
 
@@ -388,7 +423,7 @@ def _classify_resource_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": f"bad_request:{suffix}",
             "status_code": status_code,
             "detail": detail,
-            "invalid_minutes": BAD_REQUEST_INVALID_MINUTES,
+            "invalid_minutes": CLIENT_ERROR_INVALID_MINUTES,
             "retry_auto": True,
         }
 
@@ -398,7 +433,7 @@ def _classify_resource_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": f"model_not_found:{suffix}",
             "status_code": status_code,
             "detail": detail,
-            "invalid_minutes": MODEL_NOT_FOUND_INVALID_MINUTES,
+            "invalid_minutes": CLIENT_ERROR_INVALID_MINUTES,
             "retry_auto": True,
         }
 
@@ -408,7 +443,26 @@ def _classify_resource_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": f"model_gone:{suffix}",
             "status_code": status_code,
             "detail": detail,
-            "invalid_minutes": MODEL_NOT_FOUND_INVALID_MINUTES,
+            "invalid_minutes": CLIENT_ERROR_INVALID_MINUTES,
+            "retry_auto": True,
+        }
+
+    if isinstance(status_code, int) and 400 <= status_code <= 499:
+        return {
+            "action": "invalid_resource",
+            "reason": f"client_error:{status_code}:{suffix}",
+            "status_code": status_code,
+            "detail": detail,
+            "invalid_minutes": CLIENT_ERROR_INVALID_MINUTES,
+            "retry_auto": True,
+        }
+
+    if items and all(_is_temporary_resource_error_status(item.get("status_code")) for item in items):
+        return {
+            "action": "temporary_quarantine",
+            "reason": _temporary_error_reason(status_code, detail),
+            "status_code": status_code,
+            "detail": detail,
             "retry_auto": True,
         }
 
@@ -725,7 +779,8 @@ async def _arrest_temporary_resource(
     backoff_key = _temporary_backoff_key(provider_name, model_id, resolved_route_id)
     temporary_backoff = dict((payload.get("meta") or {}).get("temporary_backoff", {}))
     previous_minutes = int(temporary_backoff.get(backoff_key) or 0)
-    next_minutes = max(10, previous_minutes * 2 if previous_minutes else 10)
+    minimum_minutes = SERVICE_UNAVAILABLE_QUARANTINE_MINUTES if status_code == 503 else DEFAULT_TEMPORARY_QUARANTINE_MINUTES
+    next_minutes = max(minimum_minutes, previous_minutes * 2 if previous_minutes else minimum_minutes)
     temporary_backoff[backoff_key] = next_minutes
     payload.setdefault("meta", {})
     payload["meta"]["temporary_backoff"] = temporary_backoff
@@ -1421,7 +1476,8 @@ def _category_for_model(model: dict) -> str:
     model_id = str(model.get("id", "")).lower()
     name = str(model.get("name", "")).lower()
     description = str(model.get("description", "")).lower()
-    haystack = f"{model_id} {name} {description}"
+    kind = str(model.get("kind", "")).lower()
+    haystack = f"{model_id} {name} {description} {kind}"
 
     audio_hints = ["whisper", "transcribe", "transcription", "speech-to-text", "stt", "asr", "audio"]
     video_hints = ["video", "veo", "sora", "movie", "clip", "vision-video", "gen-video"]
@@ -1450,6 +1506,10 @@ def _category_for_model(model: dict) -> str:
         return "audio"
     if any(hint in haystack for hint in video_hints):
         return "video"
+    if model.get("supports_chat") is True and (
+        model.get("supports_tools") is True or "hf_base_model" in kind or "language" in haystack
+    ):
+        return "llm"
     if any(hint in haystack for hint in llm_hints):
         return "llm"
     return "other"
@@ -1575,6 +1635,93 @@ def _find_known_model(provider_name: str | None, model_id: str | None) -> dict[s
     return dict(_known_model_catalog().get(_resource_id(provider_name, model_id)) or {})
 
 
+def _auto_route_unavailable_detail(request: ChatCompletionRequest) -> tuple[int, Any]:
+    requested_model = str(request.model or "").strip()
+    requested_provider = str(request.provider or "").strip()
+    if not requested_model or _is_auto_value(requested_model):
+        return 404, "No available provider/model route for requested auto selection"
+
+    configured_providers = {
+        str(provider).strip()
+        for provider in settings.get_provider_configs().keys()
+        if str(provider).strip()
+    }
+    snapshot = rate_limit_store.get_snapshot(list(configured_providers))
+    known_routes: list[dict[str, Any]] = []
+    for resource_id, model in _known_model_catalog().items():
+        provider_name = str(model.get("provider") or "").strip()
+        model_id = str(model.get("id") or model.get("model_id") or "").strip()
+        if model_id != requested_model:
+            continue
+        if requested_provider and not _is_auto_value(requested_provider) and provider_name != requested_provider:
+            continue
+        provider_state = snapshot.get(provider_name, {})
+        quarantine = provider_state.get("quarantine") or {}
+        status = "available"
+        if provider_name not in configured_providers:
+            status = "provider_not_configured"
+        elif quarantine.get("active"):
+            status = "provider_quarantined"
+        elif _is_invalid_resource(provider_name, model_id):
+            status = "resource_quarantined"
+        elif _category_for_model(model) != "llm" or not _model_supports_chat(model):
+            status = "not_chat_capable"
+        known_routes.append(
+            {
+                "provider": provider_name,
+                "model": model_id,
+                "status": status,
+                "provider_status_code": provider_state.get("last_status_code"),
+                "provider_quarantine": quarantine,
+                "route_id": _resolve_local_route_id(provider_name, model_id),
+            }
+        )
+
+    invalid_payload = _load_invalid_resources()
+    for item in invalid_payload.get("data", []):
+        if not isinstance(item, dict):
+            continue
+        provider_name = str(item.get("provider") or "").strip()
+        model_id = str(item.get("model") or "").strip()
+        if model_id != requested_model:
+            continue
+        if requested_provider and not _is_auto_value(requested_provider) and provider_name != requested_provider:
+            continue
+        if any(route.get("provider") == provider_name and route.get("model") == model_id for route in known_routes):
+            continue
+        provider_state = snapshot.get(provider_name, {})
+        known_routes.append(
+            {
+                "provider": provider_name,
+                "model": model_id,
+                "status": "resource_quarantined" if item.get("blocking") else "resource_recorded_error",
+                "provider_status_code": provider_state.get("last_status_code"),
+                "provider_quarantine": provider_state.get("quarantine") or {},
+                "route_id": item.get("route_id") or _resolve_local_route_id(provider_name, model_id),
+                "reason": item.get("reason"),
+                "status_code": item.get("status_code"),
+                "invalid_until": item.get("invalid_until"),
+            }
+        )
+
+    if known_routes:
+        return 409, {
+            "error": "requested_model_unavailable",
+            "detail": "Requested model is known, but no currently usable route is available.",
+            "requested_provider": requested_provider or None,
+            "requested_model": requested_model,
+            "routes": known_routes,
+        }
+
+    return 404, {
+        "error": "requested_model_unknown",
+        "detail": "Requested model is not present in the local runtime route catalog.",
+        "requested_provider": requested_provider or None,
+        "requested_model": requested_model,
+        "configured_providers": sorted(configured_providers),
+    }
+
+
 def _remaining_rpm(item: dict) -> int | None:
     return item.get("limits", {}).get("requests", {}).get("minute", {}).get("remaining")
 
@@ -1609,6 +1756,11 @@ def _runtime_chat_models() -> list[dict]:
     #   or not suitable for the numeric Block #2 presentation.
     # Runtime dispatcher should build a union of both pools instead of using Block #4 as a fallback switch.
     cache = _get_runtime_dispatcher_cache()
+    configured_providers = {
+        str(provider).strip()
+        for provider in settings.get_provider_configs().keys()
+        if str(provider).strip()
+    }
     combined_models = [
         *(((cache.get("validated_llm") or {}).get("data") or [])),
         *(((cache.get("block_two") or {}).get("data") or [])),
@@ -1621,6 +1773,8 @@ def _runtime_chat_models() -> list[dict]:
         provider = str(model.get("provider") or "").strip()
         model_id = str(model.get("id") or "").strip()
         if not provider or not model_id:
+            continue
+        if provider not in configured_providers:
             continue
         if _category_for_model(model) != "llm":
             continue
@@ -1649,6 +1803,7 @@ def _runtime_chat_models() -> list[dict]:
         if isinstance(route, dict)
         and route.get("provider")
         and route.get("model_id")
+        and str(route.get("provider") or "").strip() in configured_providers
         and route.get("category") == "llm"
         and not rate_limit_store.is_provider_quarantined(str(route.get("provider") or ""))
         and not _is_invalid_resource(str(route.get("provider") or ""), str(route.get("model_id") or ""))
@@ -1669,6 +1824,38 @@ def _extract_client_id(request: ChatCompletionRequest) -> str | None:
         if value is not None and str(value).strip():
             return str(value).strip()
     return None
+
+
+def _raise_chat_proxy_error(
+    request: ChatCompletionRequest,
+    status_code: int,
+    detail: Any,
+    *,
+    effective_request: ChatCompletionRequest | None = None,
+    selected_route: dict[str, Any] | None = None,
+    reason: str = "",
+) -> None:
+    inspected_request = effective_request or request
+    client_id = _extract_client_id(request)
+    route_id = None
+    provider_name = str(getattr(inspected_request, "provider", "") or "")
+    model_id = str(getattr(inspected_request, "model", "") or "")
+    if provider_name and model_id:
+        route_id = _resolve_local_route_id(provider_name, model_id)
+    provider_router.logger.warning(
+        "chat_proxy_error status_code=%s reason=%s requested_provider=%s requested_model=%s effective_provider=%s effective_model=%s client_id=%s route_id=%s selected_route=%s detail=%s",
+        status_code,
+        reason,
+        getattr(request, "provider", None),
+        getattr(request, "model", None),
+        provider_name or None,
+        model_id or None,
+        client_id,
+        route_id,
+        selected_route,
+        " ".join(str(detail).split())[:1000],
+    )
+    raise HTTPException(status_code=status_code, detail=detail)
 
 
 def _request_uses_tools(request: ChatCompletionRequest) -> bool:
@@ -1847,7 +2034,11 @@ def _pick_auto_route(
             models_count_by_provider[provider_name] = models_count_by_provider.get(provider_name, 0) + 1
 
     route_candidates: list[dict] = []
-    previous_binding = CLIENT_RESOURCE_AFFINITY.get(client_id) if client_id else None
+    previous_binding = (
+        CLIENT_RESOURCE_AFFINITY.get(client_id)
+        if resource_affinity == "sticky" and client_id
+        else None
+    )
     previous_provider = previous_binding.get("provider") if isinstance(previous_binding, dict) else None
 
     for index, model in enumerate(filtered_models):
@@ -1864,8 +2055,6 @@ def _pick_auto_route(
         estimated_rpm, estimated_rpd = _estimated_provider_limits(provider_name)
         has_live_limits = source == "response_headers"
         has_estimated_limits = estimated_rpm >= 0 or estimated_rpd >= 0
-        if not has_live_limits and not has_estimated_limits:
-            continue
 
         rpm_remaining = _remaining_rpm(item)
         rpd_remaining = _remaining_rpd(item)
@@ -1874,8 +2063,6 @@ def _pick_auto_route(
         effective_rpd_remaining = rpd_remaining if rpd_remaining is not None else estimated_rpd
         effective_tpm_remaining = tpm_remaining if tpm_remaining is not None else -1
         has_recent_error = bool(item.get("last_error"))
-        if has_recent_error:
-            continue
         if effective_rpm_remaining == 0 or effective_rpd_remaining == 0 or effective_tpm_remaining == 0:
             continue
 
@@ -1894,7 +2081,7 @@ def _pick_auto_route(
                 "provider": provider_name,
                 "model": model_id,
                 "resource_id": resource_id,
-                "source_rank": 0 if has_live_limits else 1,
+                "source_rank": 0 if has_live_limits else 1 if has_estimated_limits else 2,
                 "rpm_remaining": effective_rpm_remaining,
                 "rpd_remaining": effective_rpd_remaining,
                 "tpm_remaining": effective_tpm_remaining,
@@ -1902,6 +2089,7 @@ def _pick_auto_route(
                 "recent_request_count": recent_request_count,
                 "last_used_ts": last_used_ts,
                 "same_provider_penalty": same_provider_penalty,
+                "recent_error_penalty": 1 if has_recent_error else 0,
                 "index": index,
             }
         )
@@ -1946,6 +2134,7 @@ def _pick_auto_route(
             candidate["source_rank"],
             candidate["last_used_ts"],
             candidate["recent_request_count"],
+            candidate["recent_error_penalty"],
             candidate["same_provider_penalty"],
             -candidate["rpm_remaining"],
             -candidate["tpm_remaining"],
@@ -2498,7 +2687,7 @@ async def get_models() -> dict:
 
 @router.post("/v1/chat/completions", tags=["Chat"])
 async def create_chat_completion(request: ChatCompletionRequest) -> dict:
-    requested_provider_auto = _is_auto_value(request.provider)
+    requested_provider_auto = _is_auto_value(request.provider) or not str(request.provider or "").strip()
     requested_model_auto = _is_auto_value(request.model)
     expected_response_type = _normalize_response_type(getattr(request, "response_type", None))
     candidate_models = _runtime_chat_models() if (requested_provider_auto or requested_model_auto) else []
@@ -2515,20 +2704,28 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
             selected_route = _pick_auto_route(candidate_models, request, excluded_resource_ids=excluded_resource_ids)
             last_selected_route = selected_route
             if not selected_route:
-                detail: Any = "No available provider/model route for requested auto selection"
+                status_code, detail = _auto_route_unavailable_detail(request)
                 if mismatch_errors:
+                    status_code = 502
                     detail = {
                         "error": "response_type_mismatch_exhausted",
                         "expected_response_type": expected_response_type,
                         "attempts": mismatch_errors,
                     }
                 elif dispatch_retry_errors:
+                    status_code = 502
                     detail = {
                         "error": "auto_route_exhausted",
                         "attempts": dispatch_retry_errors,
                         "last_selected_route": last_selected_route,
                     }
-                raise HTTPException(status_code=404 if not (mismatch_errors or dispatch_retry_errors) else 502, detail=detail)
+                _raise_chat_proxy_error(
+                    request,
+                    status_code,
+                    detail,
+                    selected_route=last_selected_route,
+                    reason="auto_route_unavailable",
+                )
 
             update_payload = {}
             if requested_provider_auto:
@@ -2553,9 +2750,10 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                     status_code=400,
                 )
             await _refresh_admin_cache_async()
-            raise HTTPException(
-                status_code=400,
-                detail={
+            _raise_chat_proxy_error(
+                request,
+                400,
+                {
                     "error": "request_incompatible",
                     "reason": payload_error["reason"],
                     "detail": payload_error["detail"],
@@ -2563,13 +2761,17 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                     "model": model_id,
                     "route_id": route_id,
                 },
+                effective_request=effective_request,
+                selected_route=selected_route,
+                reason="request_incompatible",
             )
 
         if _is_invalid_resource(effective_request.provider, effective_request.model):
             invalid_item = _find_invalid_resource(effective_request.provider, effective_request.model)
-            raise HTTPException(
-                status_code=409,
-                detail={
+            _raise_chat_proxy_error(
+                request,
+                409,
+                {
                     "error": "invalid_resource",
                     "provider": effective_request.provider,
                     "model": effective_request.model,
@@ -2579,6 +2781,9 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                     "arrested_at": invalid_item.get("arrested_at"),
                     "invalid_until": invalid_item.get("invalid_until"),
                 },
+                effective_request=effective_request,
+                selected_route=selected_route,
+                reason="invalid_resource",
             )
 
         excluded_providers: set[str] = set()
@@ -2593,13 +2798,17 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                 configured_providers = {str(name).strip() for name in settings.get_provider_configs().keys() if str(name).strip()}
                 if configured_providers and configured_providers.issubset(excluded_providers):
                     await _refresh_admin_cache_async()
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
+                    _raise_chat_proxy_error(
+                        request,
+                        409,
+                        {
                             "error": "all_model_resources_quarantined",
                             "model": str(effective_request.model),
                             "excluded_providers": sorted(excluded_providers),
                         },
+                        effective_request=effective_request,
+                        selected_route=selected_route,
+                        reason="all_model_resources_quarantined",
                     )
         try:
             response = await provider_router.race_chat_completion(
@@ -2608,7 +2817,14 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
             )
         except ValueError as exc:
             await _refresh_admin_cache_async()
-            raise HTTPException(status_code=400, detail=str(exc))
+            _raise_chat_proxy_error(
+                request,
+                400,
+                str(exc),
+                effective_request=effective_request,
+                selected_route=selected_route,
+                reason="value_error",
+            )
         except UpstreamProvidersExhausted as exc:
             retryable_errors = [error for error in exc.errors if isinstance(error, dict)]
             classification = _classify_resource_error(retryable_errors)
@@ -2663,15 +2879,26 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                     continue
             await _refresh_admin_cache_async()
             if dispatch_retry_errors:
-                raise HTTPException(
-                    status_code=502,
-                    detail={
+                _raise_chat_proxy_error(
+                    request,
+                    502,
+                    {
                         "error": "auto_route_exhausted",
                         "attempts": dispatch_retry_errors + list(exc.errors),
                         "last_selected_route": last_selected_route,
                     },
+                    effective_request=effective_request,
+                    selected_route=selected_route,
+                    reason="auto_route_exhausted",
                 )
-            raise HTTPException(status_code=502, detail=exc.errors)
+            _raise_chat_proxy_error(
+                request,
+                502,
+                exc.errors,
+                effective_request=effective_request,
+                selected_route=selected_route,
+                reason="upstream_providers_exhausted",
+            )
 
         response.setdefault("_proxy", {})
         response["provider"] = response["_proxy"].get("selected_provider") or effective_request.provider
@@ -2716,15 +2943,19 @@ async def create_chat_completion(request: ChatCompletionRequest) -> dict:
                 continue
 
             await _refresh_admin_cache_async()
-            raise HTTPException(
-                status_code=502,
-                detail={
+            _raise_chat_proxy_error(
+                request,
+                502,
+                {
                     "error": "response_type_mismatch",
                     "expected_response_type": expected_response_type,
                     "provider": provider_name,
                     "model": model_id,
                     "route_id": route_id,
                 },
+                effective_request=effective_request,
+                selected_route=selected_route,
+                reason="response_type_mismatch",
             )
 
         if requested_provider_auto or requested_model_auto:

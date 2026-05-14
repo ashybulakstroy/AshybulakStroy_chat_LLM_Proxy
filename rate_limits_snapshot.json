@@ -1,13 +1,12 @@
 {
-  "saved_at": "2026-04-01T13:03:16.978650+00:00",
-  "last_probe_at": "2026-04-01T13:01:29.721591+00:00",
+  "saved_at": "2026-05-14T17:09:25.557353+00:00",
+  "last_probe_at": "2026-05-14T17:03:46.816710+00:00",
   "last_probe_summary": {
     "successful": [
-      "groq",
-      "openrouter",
       "cerebras",
       "gemini",
-      "sambanova"
+      "sambanova",
+      "fireworks"
     ],
     "failed": []
   },
@@ -63,9 +62,15 @@
         "rpd_reset": null,
         "source": "response_headers"
       },
-      "last_observed_at": "2026-04-01T13:03:07.566738+00:00",
-      "last_status_code": 200,
-      "last_error": null
+      "last_observed_at": "2026-05-14T15:54:08.528760+00:00",
+      "last_status_code": 401,
+      "last_error": "{\"error\":{\"message\":\"Invalid API Key\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}}\n",
+      "quarantine": {
+        "active": true,
+        "until": "2026-05-15T15:54:08.528760+00:00",
+        "reason": "{\"error\":{\"message\":\"Invalid API Key\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}}\n",
+        "status_code": 401
+      }
     },
     "openrouter": {
       "provider": "openrouter",
@@ -119,64 +124,76 @@
         "source": "fallback_default",
         "note": "Provider did not expose rate-limit headers; using safe fallback of 1 RPM."
       },
-      "last_observed_at": "2026-04-01T13:03:08.280654+00:00",
-      "last_status_code": 200,
-      "last_error": null
+      "last_observed_at": "2026-05-14T15:54:09.520612+00:00",
+      "last_status_code": 402,
+      "last_error": "{\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402}}",
+      "quarantine": {
+        "active": true,
+        "until": "2026-05-15T15:54:09.520612+00:00",
+        "reason": "{\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402}}",
+        "status_code": 402
+      }
     },
     "cerebras": {
       "provider": "cerebras",
       "limits": {
         "requests": {
           "minute": {
-            "limit": 30,
-            "remaining": 29,
+            "limit": 5,
+            "remaining": 0,
             "reset_seconds": null,
             "reset_at": null
           },
           "hour": {
-            "limit": 900,
-            "remaining": 899,
+            "limit": 150,
+            "remaining": 145,
             "reset_seconds": null,
             "reset_at": null
           },
           "day": {
-            "limit": 14400,
-            "remaining": 14399,
+            "limit": 2400,
+            "remaining": 2395,
             "reset_seconds": null,
             "reset_at": null
           }
         },
         "tokens": {
           "minute": {
-            "limit": 60000,
-            "remaining": 59957,
+            "limit": 30000,
+            "remaining": 25155,
             "reset_seconds": null,
             "reset_at": null
           },
           "hour": {
             "limit": 1000000,
-            "remaining": 999957,
+            "remaining": 994043,
             "reset_seconds": null,
             "reset_at": null
           },
           "day": {
             "limit": 1000000,
-            "remaining": 999957,
+            "remaining": 992712,
             "reset_seconds": null,
             "reset_at": null
           }
         },
-        "rpm": 30,
-        "rpm_remaining": 29,
+        "rpm": 5,
+        "rpm_remaining": 0,
         "rpm_reset": null,
-        "rpd": 14400,
-        "rpd_remaining": 14399,
+        "rpd": 2400,
+        "rpd_remaining": 2395,
         "rpd_reset": null,
         "source": "response_headers"
       },
-      "last_observed_at": "2026-04-01T13:03:08.987038+00:00",
+      "last_observed_at": "2026-05-14T17:04:50.213904+00:00",
       "last_status_code": 200,
-      "last_error": null
+      "last_error": null,
+      "quarantine": {
+        "active": false,
+        "until": null,
+        "reason": null,
+        "status_code": null
+      }
     },
     "gemini": {
       "provider": "gemini",
@@ -230,9 +247,15 @@
         "source": "fallback_default",
         "note": "Provider did not expose rate-limit headers; using safe fallback of 1 RPM."
       },
-      "last_observed_at": "2026-04-01T13:03:09.706406+00:00",
+      "last_observed_at": "2026-05-14T17:09:25.557353+00:00",
       "last_status_code": 200,
-      "last_error": null
+      "last_error": null,
+      "quarantine": {
+        "active": false,
+        "until": null,
+        "reason": null,
+        "status_code": null
+      }
     },
     "sambanova": {
       "provider": "sambanova",
@@ -252,9 +275,9 @@
           },
           "day": {
             "limit": 20,
-            "remaining": 14,
-            "reset_seconds": 86397,
-            "reset_at": "2026-04-02T11:28:24.880877+00:00"
+            "remaining": 0,
+            "reset_seconds": 86401,
+            "reset_at": "2026-05-15T17:09:14.677384+00:00"
           }
         },
         "tokens": {
@@ -281,13 +304,80 @@
         "rpm_remaining": null,
         "rpm_reset": null,
         "rpd": 20,
-        "rpd_remaining": 14,
-        "rpd_reset": 86397,
+        "rpd_remaining": 0,
+        "rpd_reset": 86401,
         "source": "response_headers"
       },
-      "last_observed_at": "2026-04-01T13:03:16.978650+00:00",
+      "last_observed_at": "2026-05-14T17:09:13.677384+00:00",
       "last_status_code": 200,
-      "last_error": null
+      "last_error": null,
+      "quarantine": {
+        "active": false,
+        "until": null,
+        "reason": null,
+        "status_code": null
+      }
+    },
+    "fireworks": {
+      "provider": "fireworks",
+      "limits": {
+        "requests": {
+          "minute": {
+            "limit": 60,
+            "remaining": 59,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "tokens": {
+          "minute": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "hour": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          },
+          "day": {
+            "limit": null,
+            "remaining": null,
+            "reset_seconds": null,
+            "reset_at": null
+          }
+        },
+        "rpm": 60,
+        "rpm_remaining": 59,
+        "rpm_reset": null,
+        "rpd": null,
+        "rpd_remaining": null,
+        "rpd_reset": null,
+        "source": "response_headers"
+      },
+      "last_observed_at": "2026-05-14T17:03:42.160064+00:00",
+      "last_status_code": 200,
+      "last_error": null,
+      "quarantine": {
+        "active": false,
+        "until": null,
+        "reason": null,
+        "status_code": null
+      }
     }
   }
 }

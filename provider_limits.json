@@ -1,5 +1,5 @@
 {
-  "snapshot_date": "2026-04-01",
+  "snapshot_date": "2026-05-14",
   "providers": {
     "groq": {
       "estimated_rpm": 1000,
@@ -8,10 +8,10 @@
       "notes": "Auto-synced from live provider headers."
     },
     "cerebras": {
-      "estimated_rpm": 30,
-      "estimated_rpd": 14400,
+      "estimated_rpm": 5,
+      "estimated_rpd": 2400,
       "tier": "observed_live",
-      "notes": "Live response headers exposed 30 requests per minute and 14,400 requests per day."
+      "notes": "Auto-synced from live provider headers."
     },
     "openrouter": {
       "estimated_rpm": 20,
@@ -28,6 +28,12 @@
     "sambanova": {
       "estimated_rpm": 1,
       "estimated_rpd": 20,
+      "tier": "observed_live",
+      "notes": "Auto-synced from live provider headers."
+    },
+    "fireworks": {
+      "estimated_rpm": 60,
+      "estimated_rpd": null,
       "tier": "observed_live",
       "notes": "Auto-synced from live provider headers."
     }

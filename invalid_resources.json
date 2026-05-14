@@ -1,0 +1,160 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "resource_id": "openrouter::openai/gpt-chat-latest",
+      "provider": "openrouter",
+      "model": "openai/gpt-chat-latest",
+      "route_id": "c1ee8c87ba66",
+      "reason": "provider_credits_exhausted:credits",
+      "status_code": 402,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:54:09.525561+00:00",
+      "invalid_until": "2026-05-15T15:54:09.525561+00:00"
+    },
+    {
+      "resource_id": "openrouter::qwen/qwen3.6-flash",
+      "provider": "openrouter",
+      "model": "qwen/qwen3.6-flash",
+      "route_id": "1a3e28a4265b",
+      "reason": "provider_credits_exhausted:credits",
+      "status_code": 402,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:54:09.154426+00:00",
+      "invalid_until": "2026-05-15T15:54:09.154426+00:00"
+    },
+    {
+      "resource_id": "groq::llama-3.1-8b-instant",
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant",
+      "route_id": "28a97fb3212b",
+      "reason": "client_error:401:generic",
+      "status_code": 401,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:54:08.528760+00:00",
+      "invalid_until": "2026-05-15T15:54:08.528760+00:00"
+    },
+    {
+      "resource_id": "groq::llama-3.3-70b-versatile",
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "route_id": "ac84c079a501",
+      "reason": "client_error:401:generic",
+      "status_code": 401,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:54:08.127365+00:00",
+      "invalid_until": "2026-05-15T15:54:08.127365+00:00"
+    },
+    {
+      "resource_id": "openrouter::google/gemma-3-27b-it:free",
+      "provider": "openrouter",
+      "model": "google/gemma-3-27b-it:free",
+      "route_id": "545fc5210cab",
+      "reason": "model_not_found:generic",
+      "status_code": 404,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:31:38.619431+00:00",
+      "invalid_until": "2026-05-15T15:31:38.619431+00:00"
+    },
+    {
+      "resource_id": "sambanova::DeepSeek-V3.2",
+      "provider": "sambanova",
+      "model": "DeepSeek-V3.2",
+      "route_id": "d424d0c110d0",
+      "reason": "bad_request:generic",
+      "status_code": 400,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:31:37.943917+00:00",
+      "invalid_until": "2026-05-15T15:31:37.943917+00:00"
+    },
+    {
+      "resource_id": "openrouter::arcee-ai/trinity-large-preview:free",
+      "provider": "openrouter",
+      "model": "arcee-ai/trinity-large-preview:free",
+      "route_id": "a44d544e08b7",
+      "reason": "model_not_found:generic",
+      "status_code": 404,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:30:50.074383+00:00",
+      "invalid_until": "2026-05-15T15:30:50.074383+00:00"
+    },
+    {
+      "resource_id": "openrouter::google/gemma-3-12b-it:free",
+      "provider": "openrouter",
+      "model": "google/gemma-3-12b-it:free",
+      "route_id": "98e6665b7b9f",
+      "reason": "model_not_found:generic",
+      "status_code": 404,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T15:30:35.573923+00:00",
+      "invalid_until": "2026-05-15T15:30:35.573923+00:00"
+    },
+    {
+      "resource_id": "groq::openai/gpt-oss-20b",
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "route_id": "6f8d275a8bbb",
+      "reason": "resource_error:401",
+      "status_code": 401,
+      "source": "error_observation",
+      "blocking": true,
+      "arrested_at": "2026-05-14T13:48:13.005532+00:00",
+      "invalid_until": "2026-05-15T13:48:13.005532+00:00",
+      "detail": "{\"error\":{\"message\":\"Invalid API Key\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}}"
+    },
+    {
+      "resource_id": "fireworks::openai/gpt-oss-20b",
+      "provider": "fireworks",
+      "model": "openai/gpt-oss-20b",
+      "route_id": "7fd7e08413c6",
+      "reason": "model_not_found:not_found",
+      "status_code": 404,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T13:47:19.194068+00:00",
+      "invalid_until": "2026-05-15T13:47:19.194068+00:00"
+    },
+    {
+      "resource_id": "sambanova::openai/gpt-oss-20b",
+      "provider": "sambanova",
+      "model": "openai/gpt-oss-20b",
+      "route_id": "28934a127e4c",
+      "reason": "model_not_found:generic",
+      "status_code": 404,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T13:47:19.169145+00:00",
+      "invalid_until": "2026-05-15T13:47:19.169145+00:00"
+    },
+    {
+      "resource_id": "cerebras::openai/gpt-oss-20b",
+      "provider": "cerebras",
+      "model": "openai/gpt-oss-20b",
+      "route_id": "c8988482c9c7",
+      "reason": "model_not_found:generic",
+      "status_code": 404,
+      "source": "invalid_resource",
+      "blocking": true,
+      "arrested_at": "2026-05-14T13:47:19.123452+00:00",
+      "invalid_until": "2026-05-15T13:47:19.123452+00:00"
+    }
+  ],
+  "meta": {
+    "updated_at": "2026-05-14T17:01:29.466312+00:00",
+    "total": 12,
+    "temporary_backoff": {
+      "b8a15d2af3e8": 10,
+      "63b633ddcf52": 10,
+      "d424d0c110d0": 10,
+      "a8475c5427a2": 60
+    }
+  }
+}
