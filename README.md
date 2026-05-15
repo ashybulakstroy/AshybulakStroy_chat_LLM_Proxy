@@ -300,6 +300,7 @@ PROXY_MODE=LOAD_BALANCE
 | Cerebras | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` | настроен локально |
 | SambaNova | `https://api.sambanova.ai/v1` | `SAMBANOVA_API_KEY` | настроен локально |
 | Fireworks | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | настроен локально |
+| Cloudflare Workers AI | `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1` | `CLOUDFLARE_API_TOKEN` | настроен локально |
 | Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` | ключ еще не добавлен |
 | OpenRouter | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | на боевом сервере 402/quarantine |
 | Eden AI | `https://api.edenai.run/v3/llm` | `EDENAI_API_KEY` | на боевом сервере 402/quarantine |
@@ -323,6 +324,9 @@ GEMINI_API_KEY=
 SAMBANOVA_API_KEY=
 EDENAI_API_KEY=
 FIREWORKS_API_KEY=
+CLOUDFLARE_API_TOKEN=
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_API_BASE=
 ```
 
 Для P2P:

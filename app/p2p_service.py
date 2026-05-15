@@ -965,7 +965,7 @@ class P2PService:
         if not target_master:
             return {"status": "skipped", "reason": "missing_master_url"}
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.get(f"{target_master}/internal/p2p/network-map")
             response.raise_for_status()
             payload = response.json()
@@ -1009,7 +1009,7 @@ class P2PService:
             "shared_tpm_ratio": self._safe_ratio(settings.P2P_SHARED_TPM_RATIO),
         }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(f"{target_master}/admin/p2p/peers/heartbeat", params=payload)
             response.raise_for_status()
             body = response.json()
@@ -1049,7 +1049,7 @@ class P2PService:
                     changes += 1
                 return
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(timeout=20.0) as client:
                     response = await client.get(f"{base_url}/admin/p2p/status")
                     response.raise_for_status()
                     payload = response.json()
@@ -1105,7 +1105,7 @@ class P2PService:
         master_url = self._local_base_url()
         requested = 0
         failures: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             for peer in peers:
                 base_url = str(peer.get("base_url") or "").strip().rstrip("/")
                 peer_id = str(peer.get("peer_id") or "").strip() or "peer"

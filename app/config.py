@@ -41,6 +41,10 @@ class Settings:
     FIREWORKS_API_KEY: str = os.getenv("FIREWORKS_API_KEY", "")
     FIREWORKS_API_BASE: str = os.getenv("FIREWORKS_API_BASE", "https://api.fireworks.ai/inference/v1")
 
+    CLOUDFLARE_API_TOKEN: str = os.getenv("CLOUDFLARE_API_TOKEN", "")
+    CLOUDFLARE_ACCOUNT_ID: str = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+    CLOUDFLARE_API_BASE: str = os.getenv("CLOUDFLARE_API_BASE", "")
+
     ENABLE_PROVIDER_LOG: bool = os.getenv("ENABLE_PROVIDER_LOG", "false").lower() in ("1", "true", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
     PROXY_MODE: str = os.getenv("PROXY_MODE", "LOAD_BALANCE").upper()
@@ -64,7 +68,7 @@ class Settings:
     P2P_MAX_REMOTE_SESSIONS: int = int(os.getenv("P2P_MAX_REMOTE_SESSIONS", "3"))
     P2P_MAX_OUTGOING_SESSIONS: int = int(os.getenv("P2P_MAX_OUTGOING_SESSIONS", "5"))
     P2P_MAX_QUEUE_SIZE: int = int(os.getenv("P2P_MAX_QUEUE_SIZE", "50"))
-    P2P_SESSION_TIMEOUT_SEC: int = int(os.getenv("P2P_SESSION_TIMEOUT_SEC", "90"))
+    P2P_SESSION_TIMEOUT_SEC: int = int(os.getenv("P2P_SESSION_TIMEOUT_SEC", "180"))
     P2P_PER_PEER_RPM_LIMIT: int = int(os.getenv("P2P_PER_PEER_RPM_LIMIT", "20"))
     P2P_PER_TARGET_PEER_RPM_LIMIT: int = int(os.getenv("P2P_PER_TARGET_PEER_RPM_LIMIT", "20"))
     P2P_GLOBAL_INCOMING_RPM_LIMIT: int = int(os.getenv("P2P_GLOBAL_INCOMING_RPM_LIMIT", "60"))
@@ -83,8 +87,18 @@ class Settings:
             "sambanova": ProviderConfig("sambanova", self.SAMBANOVA_API_KEY, self.SAMBANOVA_API_BASE),
             "edenai": ProviderConfig("edenai", self.EDENAI_API_KEY, self.EDENAI_API_BASE),
             "fireworks": ProviderConfig("fireworks", self.FIREWORKS_API_KEY, self.FIREWORKS_API_BASE),
+            "cloudflare": ProviderConfig(
+                "cloudflare",
+                self.CLOUDFLARE_API_TOKEN,
+                self.CLOUDFLARE_API_BASE
+                or (
+                    f"https://api.cloudflare.com/client/v4/accounts/{self.CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+                    if self.CLOUDFLARE_ACCOUNT_ID
+                    else ""
+                ),
+            ),
         }
-        return {name: config for name, config in configs.items() if config.api_key}
+        return {name: config for name, config in configs.items() if config.api_key and config.api_base}
 
 
 settings = Settings()

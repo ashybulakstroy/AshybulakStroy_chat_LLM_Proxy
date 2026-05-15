@@ -8,6 +8,7 @@ import httpx
 
 from app.audio_transcription import AudioTranscriptionRequestData, select_audio_provider
 from app.config import ProviderConfig, settings
+from app.providers.cloudflare_provider import CloudflareWorkersAIProvider
 from app.providers.openai_provider import OpenAIProvider
 from app.rate_limits import DEFAULT_FALLBACK_RPM, rate_limit_store
 from app.schemas import ChatCompletionRequest
@@ -24,6 +25,7 @@ PROVIDER_PROBE_MODELS = {
         "accounts/fireworks/models/gpt-oss-120b",
     ],
     "gemini": ["models/gemini-2.5-flash", "models/gemini-2.0-flash"],
+    "cloudflare": ["@cf/meta/llama-3.1-8b-instruct"],
 }
 
 
@@ -249,6 +251,8 @@ class ProviderRouter:
                 if not probe_model:
                     return provider_name, "error", {
                         "provider": provider_name,
+                        "model": None,
+                        "status": "error",
                         "status_code": None,
                         "detail": "No chat-capable model found for startup probe.",
                     }
@@ -265,12 +269,16 @@ class ProviderRouter:
             except httpx.HTTPStatusError as exc:
                 return provider_name, "error", {
                     "provider": provider_name,
+                    "model": locals().get("probe_model"),
+                    "status": "error",
                     "status_code": exc.response.status_code,
                     "detail": exc.response.text,
                 }
             except Exception as exc:
                 return provider_name, "error", {
                     "provider": provider_name,
+                    "model": locals().get("probe_model"),
+                    "status": "error",
                     "status_code": None,
                     "detail": str(exc),
                 }
@@ -289,6 +297,12 @@ class ProviderRouter:
         }
 
     def _build_provider(self, provider_config: ProviderConfig) -> OpenAIProvider:
+        if provider_config.name == "cloudflare":
+            return CloudflareWorkersAIProvider(
+                provider_name=provider_config.name,
+                api_key=provider_config.api_key,
+                api_base=provider_config.api_base,
+            )
         return OpenAIProvider(
             provider_name=provider_config.name,
             api_key=provider_config.api_key,

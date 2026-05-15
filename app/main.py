@@ -7,7 +7,7 @@ from app.config import settings
 from app.p2p_service import p2p_service
 from app.rate_limits import rate_limit_store
 from app.router_service import ProviderRouter
-from app.routes import _refresh_admin_cache, router
+from app.routes import _apply_probe_failed_resource_quarantine, _refresh_admin_cache, router
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
@@ -57,6 +57,7 @@ async def _run_startup_probe_background() -> None:
             successful=summary["successful"],
             failed=summary["failed"],
         )
+        await _apply_probe_failed_resource_quarantine(summary["failed"])
         _refresh_admin_cache()
         logger.info(
             "startup_probe_completed successful=%s failed=%s",

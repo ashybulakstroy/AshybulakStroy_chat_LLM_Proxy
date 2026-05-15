@@ -33,7 +33,7 @@ class OpenAIProvider(ProviderBase):
                 endpoint,
             )
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 request_kwargs = {"headers": self.headers}
                 if method.upper() != "GET":
@@ -108,7 +108,7 @@ class OpenAIProvider(ProviderBase):
         endpoint: str,
         data: dict[str, Any],
         files: dict[str, Any],
-        timeout: float = 60.0,
+        timeout: float = 120.0,
     ) -> dict:
         url = f"{self.api_base}/{endpoint.lstrip('/')}"
         started_at = time.perf_counter()

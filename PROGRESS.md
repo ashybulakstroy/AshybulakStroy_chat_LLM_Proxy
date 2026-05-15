@@ -29,3 +29,13 @@
 - Старые записи `4xx` в `invalid_resources.json` нормализуются в blocking quarantine на 1 день; старые provider quarantine `401/402/403` из snapshot ограничиваются новым правилом 1 день.
 - Для временной upstream-ошибки `503 Service Unavailable` минимальный quarantine увеличен с 10 до 60 минут.
 - Проверен и добавлен локальный API-ключ `OPENROUTER_API_KEY`; OpenRouter API вернул статус 200 на `/models` и `/chat/completions` с моделью `openrouter/free`.
+- Исследована причина `auto_route_unavailable` после успешных запросов `law-kz-app`: `cerebras` отсекался из-за `rpm_remaining=0`, `sambanova` из-за `rpd_remaining=0`, `groq/openrouter` находились в quarantine, а готовые Fireworks LLM-маршруты были только в `routes` и не попадали в runtime pool.
+- Исправлен runtime-каталог маршрутизации: dispatcher теперь объединяет `validated_llm`, `block_two` и `routes`, а не игнорирует `routes`, когда первые пулы непустые.
+- Уточнена классификация non-chat моделей: image/embedding/flux/nano-banana/tts/live-preview больше не попадают в LLM runtime pool из устаревших route-категорий.
+- Добавлены регрессионные тесты для fallback на готовые `routes`, диагностики known model catalog и пересчёта устаревших категорий; `tests/test_routing_quality.py` проходит: `11 passed`.
+- Реализован quarantine маршрутов, недоступных из-за исчерпанных лимитов: такие ресурсы помечаются причиной `no_resource` и источником `limit_exhausted`, длительность берется из `reset_seconds` или дефолта 10 минут.
+- Добавлены регрессионные тесты для `no_resource` quarantine, диагностики маршрутов и estimated-limit отсечения; полный набор тестов проходит: `18 passed`.
+- Политика `429 Too Many Requests` изменена: новые и нормализуемые старые записи получают quarantine ресурса на 1 час вместо 1 дня; регрессионные тесты проходят: `18 passed`.
+- Все текущие timeout-ы увеличены в 2 раза: provider HTTP 30->60 секунд, multipart/audio 60->120 секунд, P2P HTTP 10->20 секунд, дефолт `P2P_SESSION_TIMEOUT_SEC` 90->180 секунд.
+- Для `503 Service Unavailable` с maintenance-текстом добавлена причина `model_maintenance`; startup/live probe теперь отправляют failed probe-модель в route-level resource quarantine. Полный набор тестов проходит: `20 passed`.
+- Проверен Cloudflare Workers AI token: account найден, OpenAI-compatible chat endpoint отвечает. Добавлен provider `cloudflare`, локальная `.env` дополнена `CLOUDFLARE_API_TOKEN` и `CLOUDFLARE_ACCOUNT_ID`, статический список моделей включает `@cf/meta/llama-3.1-8b-instruct`. Полный набор тестов проходит: `22 passed`.
